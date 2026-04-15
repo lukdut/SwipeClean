@@ -10,6 +10,9 @@ import androidx.lifecycle.viewModelScope
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.MediaStoreRepository
 import com.lukdut.swipeclean.data.SortOrder
+import com.lukdut.swipeclean.data.db.AppDatabase
+import com.lukdut.swipeclean.data.db.PhotoReviewEntity
+import com.lukdut.swipeclean.data.db.PhotoReviewStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +28,7 @@ private const val PRELOAD_AHEAD = 3
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = MediaStoreRepository(application)
+    private val dao = AppDatabase.getInstance(application).photoReviewDao()
 
     private val _photos = MutableStateFlow<List<MediaPhoto>>(emptyList())
     private val _currentIndex = MutableStateFlow(0)
@@ -71,8 +75,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun loadPhotos() {
         viewModelScope.launch {
             _isLoading.value = true
+
+            val allPhotos = repository.loadAllPhotos(_sortOrder.value)
+            val allIds = allPhotos.map { it.id }
+
+            // Remove DB entries for photos that no longer exist in MediaStore
+            if (allIds.isNotEmpty()) {
+                dao.deleteOrphans(allIds)
+            }
+
+            val keptIds = dao.getIdsByStatus(PhotoReviewStatus.KEPT).toSet()
+            val trashIds = dao.getIdsByStatus(PhotoReviewStatus.TRASH).toSet()
+
+            // Filter out already-reviewed photos; trash photos are shown in basket, not in swipe queue
+            _photos.value = allPhotos.filter { it.id !in keptIds && it.id !in trashIds }
+            _markedIds.value = trashIds.intersect(allIds.toSet()) // restore only existing photos
             _currentIndex.value = 0
-            _photos.value = repository.loadAllPhotos(_sortOrder.value)
+
             _isLoading.value = false
         }
     }
@@ -85,19 +104,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun markForDeletion() {
         val photo = _photos.value.getOrNull(_currentIndex.value) ?: return
+        viewModelScope.launch {
+            dao.upsert(PhotoReviewEntity(photo.id, PhotoReviewStatus.TRASH))
+        }
         _markedIds.update { it + photo.id }
         _currentIndex.update { it + 1 }
     }
 
     fun keep() {
+        val photo = _photos.value.getOrNull(_currentIndex.value) ?: return
+        viewModelScope.launch {
+            dao.upsert(PhotoReviewEntity(photo.id, PhotoReviewStatus.KEPT))
+        }
         _currentIndex.update { it + 1 }
     }
 
     fun restorePhoto(photoId: Long) {
+        viewModelScope.launch {
+            dao.deleteById(photoId)
+        }
         _markedIds.update { it - photoId }
     }
 
     fun restoreAll() {
+        viewModelScope.launch {
+            dao.deleteAllByStatus(PhotoReviewStatus.TRASH)
+        }
         _markedIds.value = emptySet()
     }
 
@@ -118,6 +150,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (_: Exception) {
                     }
                 }
+                dao.deleteByIds(deletedIds)
                 _markedIds.update { it - deletedIds }
                 _photos.update { photos -> photos.filter { it.id !in deletedIds } }
             }
@@ -126,6 +159,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onDeleteCompleted() {
         val deletedIds = _markedIds.value
+        viewModelScope.launch {
+            dao.deleteByIds(deletedIds)
+        }
         _markedIds.value = emptySet()
         _photos.update { photos -> photos.filter { it.id !in deletedIds } }
         _pendingDeleteSender.value = null
