@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+private const val PRELOAD_AHEAD = 3
+
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = MediaStoreRepository(application)
@@ -48,6 +50,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val nextPhoto: StateFlow<MediaPhoto?> = combine(_photos, _currentIndex) { photos, index ->
         photos.getOrNull(index + 1)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Next [PRELOAD_AHEAD] photos after the current one, used for background image caching. */
+    val photosToPreload: StateFlow<List<MediaPhoto>> = combine(_photos, _currentIndex) { photos, index ->
+        (1..PRELOAD_AHEAD).mapNotNull { offset -> photos.getOrNull(index + offset) }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val markedPhotos: StateFlow<List<MediaPhoto>> = combine(_photos, _markedIds) { photos, ids ->
         photos.filter { it.id in ids }

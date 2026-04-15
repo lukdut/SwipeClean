@@ -49,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -60,6 +61,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.size.Size
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.SortOrder
 import kotlinx.coroutines.launch
@@ -82,6 +86,19 @@ fun SwipeScreen(
     val isDone by viewModel.isDone.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
+    val photosToPreload by viewModel.photosToPreload.collectAsState()
+
+    val context = LocalContext.current
+    LaunchedEffect(photosToPreload) {
+        photosToPreload.forEach { photo ->
+            val request = ImageRequest.Builder(context)
+                .data(photo.uri)
+                .size(Size.ORIGINAL)
+                .memoryCacheKey(photo.uri.toString())
+                .build()
+            context.imageLoader.enqueue(request)
+        }
+    }
 
     Scaffold(
         topBar = {
