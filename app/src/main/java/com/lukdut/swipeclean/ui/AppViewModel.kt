@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.MediaStoreRepository
+import com.lukdut.swipeclean.data.SortOrder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _markedIds = MutableStateFlow<Set<Long>>(emptySet())
     private val _isLoading = MutableStateFlow(false)
     private val _pendingDeleteSender = MutableStateFlow<IntentSender?>(null)
+    private val _sortOrder = MutableStateFlow(SortOrder.default)
+
+    val sortOrder: StateFlow<SortOrder> = _sortOrder.asStateFlow()
 
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -61,9 +65,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isLoading.value = true
             _currentIndex.value = 0
-            _photos.value = repository.loadAllPhotos()
+            _photos.value = repository.loadAllPhotos(_sortOrder.value)
             _isLoading.value = false
         }
+    }
+
+    fun setSortOrder(order: SortOrder) {
+        if (_sortOrder.value == order) return
+        _sortOrder.value = order
+        loadPhotos()
     }
 
     fun markForDeletion() {

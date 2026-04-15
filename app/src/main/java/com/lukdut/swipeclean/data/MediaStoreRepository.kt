@@ -8,7 +8,8 @@ import kotlinx.coroutines.withContext
 
 class MediaStoreRepository(private val context: Context) {
 
-    suspend fun loadAllPhotos(): List<MediaPhoto> = withContext(Dispatchers.IO) {
+    suspend fun loadAllPhotos(sortOrder: SortOrder = SortOrder.default): List<MediaPhoto> =
+        withContext(Dispatchers.IO) {
         val photos = mutableListOf<MediaPhoto>()
 
         val projection = arrayOf(
@@ -17,14 +18,13 @@ class MediaStoreRepository(private val context: Context) {
             MediaStore.Images.Media.DATE_ADDED,
             MediaStore.Images.Media.SIZE
         )
-        val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
         context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
             null,
             null,
-            sortOrder
+            sortOrder.sqlOrder
         )?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)

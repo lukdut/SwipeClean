@@ -24,9 +24,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -41,8 +44,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +61,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.lukdut.swipeclean.data.MediaPhoto
+import com.lukdut.swipeclean.data.SortOrder
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -75,12 +81,17 @@ fun SwipeScreen(
     val progress by viewModel.swipeProgress.collectAsState()
     val isDone by viewModel.isDone.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val sortOrder by viewModel.sortOrder.collectAsState()
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("SwipeClean", fontWeight = FontWeight.Bold) },
                 actions = {
+                    SortMenu(
+                        current = sortOrder,
+                        onSelect = { viewModel.setSortOrder(it) }
+                    )
                     BadgedBox(
                         badge = {
                             if (markedCount > 0) {
@@ -342,6 +353,39 @@ private fun SwipeContent(
     LaunchedEffect(currentPhoto.id) {
         offsetX.snapTo(0f)
         offsetY.snapTo(0f)
+    }
+}
+
+@Composable
+private fun SortMenu(
+    current: SortOrder,
+    onSelect: (SortOrder) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    IconButton(onClick = { expanded = true }) {
+        Icon(Icons.Default.Sort, contentDescription = "Сортировка")
+    }
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = { expanded = false }
+    ) {
+        SortOrder.all.forEach { order ->
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        order.label,
+                        fontWeight = if (order == current) FontWeight.Bold else FontWeight.Normal,
+                        color = if (order == current) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                onClick = {
+                    expanded = false
+                    onSelect(order)
+                }
+            )
+        }
     }
 }
 
