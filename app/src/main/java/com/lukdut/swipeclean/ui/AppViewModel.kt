@@ -1,0 +1,124 @@
+package com.lukdut.swipeclean.ui
+
+import android.app.Application
+import android.content.ContentResolver
+import android.content.IntentSender
+import android.os.Build
+import android.provider.MediaStore
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.lukdut.swipeclean.data.MediaPhoto
+import com.lukdut.swipeclean.data.MediaStoreRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+class AppViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val repository = MediaStoreRepository(application)
+
+    private val _photos = MutableStateFlow<List<MediaPhoto>>(emptyList())
+    private val _currentIndex = MutableStateFlow(0)
+    private val _markedIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val _isLoading = MutableStateFlow(false)
+    private val _pendingDeleteSender = MutableStateFlow<IntentSender?>(null)
+
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    val pendingDeleteSender: StateFlow<IntentSender?> = _pendingDeleteSender.asStateFlow()
+
+    val markedCount: StateFlow<Int> = _markedIds
+        .map { it.size }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    val currentPhoto: StateFlow<MediaPhoto?> = combine(_photos, _currentIndex) { photos, index ->
+        photos.getOrNull(index)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val nextPhoto: StateFlow<MediaPhoto?> = combine(_photos, _currentIndex) { photos, index ->
+        photos.getOrNull(index + 1)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val markedPhotos: StateFlow<List<MediaPhoto>> = combine(_photos, _markedIds) { photos, ids ->
+        photos.filter { it.id in ids }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val swipeProgress: StateFlow<Pair<Int, Int>> = combine(_photos, _currentIndex) { photos, index ->
+        index to photos.size
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0 to 0)
+
+    val isDone: StateFlow<Boolean> = combine(_photos, _currentIndex) { photos, index ->
+        photos.isNotEmpty() && index >= photos.size
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun loadPhotos() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _currentIndex.value = 0
+            _photos.value = repository.loadAllPhotos()
+            _isLoading.value = false
+        }
+    }
+
+    fun markForDeletion() {
+        val photo = _photos.value.getOrNull(_currentIndex.value) ?: return
+        _markedIds.update { it + photo.id }
+        _currentIndex.update { it + 1 }
+    }
+
+    fun keep() {
+        _currentIndex.update { it + 1 }
+    }
+
+    fun restorePhoto(photoId: Long) {
+        _markedIds.update { it - photoId }
+    }
+
+    fun restoreAll() {
+        _markedIds.value = emptySet()
+    }
+
+    fun requestDelete(contentResolver: ContentResolver) {
+        val uris = markedPhotos.value.map { it.uri }
+        if (uris.isEmpty()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
+            _pendingDeleteSender.value = pendingIntent.intentSender
+        } else {
+            viewModelScope.launch {
+                val deletedIds = mutableSetOf<Long>()
+                markedPhotos.value.forEach { photo ->
+                    try {
+                        val deleted = contentResolver.delete(photo.uri, null, null)
+                        if (deleted > 0) deletedIds.add(photo.id)
+                    } catch (_: Exception) {
+                    }
+                }
+                _markedIds.update { it - deletedIds }
+                _photos.update { photos -> photos.filter { it.id !in deletedIds } }
+            }
+        }
+    }
+
+    fun onDeleteCompleted() {
+        val deletedIds = _markedIds.value
+        _markedIds.value = emptySet()
+        _photos.update { photos -> photos.filter { it.id !in deletedIds } }
+        _pendingDeleteSender.value = null
+        _currentIndex.update { index ->
+            val newSize = _photos.value.size
+            if (index > newSize) newSize else index
+        }
+    }
+
+    fun clearDeleteRequest() {
+        _pendingDeleteSender.value = null
+    }
+}
