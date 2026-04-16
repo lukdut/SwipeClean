@@ -6,6 +6,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -88,6 +89,8 @@ fun SwipeScreen(
     val sortOrder by viewModel.sortOrder.collectAsState()
     val photosToPreload by viewModel.photosToPreload.collectAsState()
 
+    var viewerPhoto by remember { mutableStateOf<MediaPhoto?>(null) }
+
     val context = LocalContext.current
     LaunchedEffect(photosToPreload) {
         photosToPreload.forEach { photo ->
@@ -98,6 +101,13 @@ fun SwipeScreen(
                 .build()
             context.imageLoader.enqueue(request)
         }
+    }
+
+    viewerPhoto?.let { photo ->
+        PhotoViewerDialog(
+            photo = photo,
+            onDismiss = { viewerPhoto = null }
+        )
     }
 
     Scaffold(
@@ -141,7 +151,8 @@ fun SwipeScreen(
                     nextPhoto = nextPhoto,
                     progress = progress,
                     onDelete = { viewModel.markForDeletion() },
-                    onKeep = { viewModel.keep() }
+                    onKeep = { viewModel.keep() },
+                    onPhotoTap = { viewerPhoto = currentPhoto }
                 )
                 else -> EmptyContent()
             }
@@ -214,7 +225,8 @@ private fun SwipeContent(
     nextPhoto: MediaPhoto?,
     progress: Pair<Int, Int>,
     onDelete: () -> Unit,
-    onKeep: () -> Unit
+    onKeep: () -> Unit,
+    onPhotoTap: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
     val offsetX = remember(currentPhoto.id) { Animatable(0f) }
@@ -280,6 +292,9 @@ private fun SwipeContent(
                         rotationZ = (offsetX.value / cardWidthPx) * ROTATION_MAX_DEG
                     }
                     .shadow(8.dp, RoundedCornerShape(20.dp))
+                    .pointerInput("tap_${currentPhoto.id}") {
+                        detectTapGestures(onTap = { onPhotoTap() })
+                    }
                     .pointerInput(currentPhoto.id) {
                         detectDragGestures(
                             onDragEnd = {
