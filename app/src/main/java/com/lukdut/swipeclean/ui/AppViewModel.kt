@@ -30,6 +30,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = MediaStoreRepository(application)
     private val dao = AppDatabase.getInstance(application).photoReviewDao()
 
+    private val _allPhotos = MutableStateFlow<List<MediaPhoto>>(emptyList())
     private val _photos = MutableStateFlow<List<MediaPhoto>>(emptyList())
     private val _currentIndex = MutableStateFlow(0)
     private val _markedIds = MutableStateFlow<Set<Long>>(emptySet())
@@ -60,7 +61,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         (1..PRELOAD_AHEAD).mapNotNull { offset -> photos.getOrNull(index + offset) }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    val markedPhotos: StateFlow<List<MediaPhoto>> = combine(_photos, _markedIds) { photos, ids ->
+    val markedPhotos: StateFlow<List<MediaPhoto>> = combine(_allPhotos, _markedIds) { photos, ids ->
         photos.filter { it.id in ids }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -78,6 +79,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
             val allPhotos = repository.loadAllPhotos(_sortOrder.value)
             val allIds = allPhotos.map { it.id }
+            _allPhotos.value = allPhotos
 
             // Remove DB entries for photos that no longer exist in MediaStore
             if (allIds.isNotEmpty()) {
@@ -152,6 +154,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 dao.deleteByIds(deletedIds)
                 _markedIds.update { it - deletedIds }
+                _allPhotos.update { photos -> photos.filter { it.id !in deletedIds } }
                 _photos.update { photos -> photos.filter { it.id !in deletedIds } }
             }
         }
@@ -163,6 +166,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             dao.deleteByIds(deletedIds)
         }
         _markedIds.value = emptySet()
+        _allPhotos.update { photos -> photos.filter { it.id !in deletedIds } }
         _photos.update { photos -> photos.filter { it.id !in deletedIds } }
         _pendingDeleteSender.value = null
         _currentIndex.update { index ->
