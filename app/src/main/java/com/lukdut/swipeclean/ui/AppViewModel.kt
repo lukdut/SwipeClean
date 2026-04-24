@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-private const val PRELOAD_AHEAD = 3
+private const val PRELOAD_AHEAD = 10
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 

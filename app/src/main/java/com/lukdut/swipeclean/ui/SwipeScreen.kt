@@ -229,8 +229,15 @@ private fun SwipeContent(
     onPhotoTap: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    val offsetX = remember(currentPhoto.id) { Animatable(0f) }
-    val offsetY = remember(currentPhoto.id) { Animatable(0f) }
+    // mutableFloatStateOf for drag tracking — updated synchronously with no coroutine, avoiding race conditions
+    var dragX by remember(currentPhoto.id) { mutableStateOf(0f) }
+    var dragY by remember(currentPhoto.id) { mutableStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+    val animX = remember(currentPhoto.id) { Animatable(0f) }
+    val animY = remember(currentPhoto.id) { Animatable(0f) }
+    // During drag use raw state, during animations use Animatable
+    val visualX = if (isDragging) dragX else animX.value
+    val visualY = if (isDragging) dragY else animY.value
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -267,7 +274,7 @@ private fun SwipeContent(
             contentAlignment = Alignment.Center
         ) {
             val cardWidthPx = constraints.maxWidth.toFloat()
-            val swipeFraction = (offsetX.value / (cardWidthPx * SWIPE_THRESHOLD_FRACTION))
+            val swipeFraction = (visualX / (cardWidthPx * SWIPE_THRESHOLD_FRACTION))
                 .coerceIn(-1f, 1f)
 
             // Back card — scale up as the front card moves away
@@ -287,9 +294,9 @@ private fun SwipeContent(
                 swipeFraction = swipeFraction,
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(offsetX.value.roundToInt(), offsetY.value.roundToInt()) }
+                    .offset { IntOffset(visualX.roundToInt(), visualY.roundToInt()) }
                     .graphicsLayer {
-                        rotationZ = (offsetX.value / cardWidthPx) * ROTATION_MAX_DEG
+                        rotationZ = (visualX / cardWidthPx) * ROTATION_MAX_DEG
                     }
                     .shadow(8.dp, RoundedCornerShape(20.dp))
                     .pointerInput("tap_${currentPhoto.id}") {
@@ -297,26 +304,40 @@ private fun SwipeContent(
                     }
                     .pointerInput(currentPhoto.id) {
                         detectDragGestures(
+                            onDragStart = {
+                                isDragging = true
+                                dragX = animX.value
+                                dragY = animY.value
+                            },
                             onDragEnd = {
+                                isDragging = false
+                                val threshold = cardWidthPx * SWIPE_THRESHOLD_FRACTION
+                                val capturedX = dragX
+                                val capturedY = dragY
                                 coroutineScope.launch {
-                                    val threshold = cardWidthPx * SWIPE_THRESHOLD_FRACTION
                                     when {
-                                        offsetX.value > threshold -> {
-                                            offsetX.animateTo(cardWidthPx * 1.6f, tween(280))
+                                        capturedX > threshold -> {
+                                            animX.snapTo(capturedX)
+                                            animY.snapTo(capturedY)
+                                            animX.animateTo(cardWidthPx * 1.6f, tween(280))
                                             onKeep()
                                         }
-                                        offsetX.value < -threshold -> {
-                                            offsetX.animateTo(-cardWidthPx * 1.6f, tween(280))
+                                        capturedX < -threshold -> {
+                                            animX.snapTo(capturedX)
+                                            animY.snapTo(capturedY)
+                                            animX.animateTo(-cardWidthPx * 1.6f, tween(280))
                                             onDelete()
                                         }
                                         else -> {
+                                            animX.snapTo(capturedX)
+                                            animY.snapTo(capturedY)
                                             launch {
-                                                offsetX.animateTo(
+                                                animX.animateTo(
                                                     0f, spring(stiffness = Spring.StiffnessMedium)
                                                 )
                                             }
                                             launch {
-                                                offsetY.animateTo(
+                                                animY.animateTo(
                                                     0f, spring(stiffness = Spring.StiffnessMedium)
                                                 )
                                             }
@@ -325,17 +346,21 @@ private fun SwipeContent(
                                 }
                             },
                             onDragCancel = {
+                                isDragging = false
+                                val capturedX = dragX
+                                val capturedY = dragY
                                 coroutineScope.launch {
-                                    launch { offsetX.animateTo(0f) }
-                                    launch { offsetY.animateTo(0f) }
+                                    animX.snapTo(capturedX)
+                                    animY.snapTo(capturedY)
+                                    launch { animX.animateTo(0f) }
+                                    launch { animY.animateTo(0f) }
                                 }
                             },
                             onDrag = { change, dragAmount ->
                                 change.consume()
-                                coroutineScope.launch {
-                                    offsetX.snapTo(offsetX.value + dragAmount.x)
-                                    offsetY.snapTo(offsetY.value + dragAmount.y)
-                                }
+                                // Direct state update — no coroutine, no race condition
+                                dragX += dragAmount.x
+                                dragY += dragAmount.y
                             }
                         )
                     }
@@ -353,8 +378,7 @@ private fun SwipeContent(
             FloatingActionButton(
                 onClick = {
                     coroutineScope.launch {
-                        // need cardWidth here — use a large value as fallback
-                        offsetX.animateTo(offsetX.value - 1200f, tween(280))
+                        animX.animateTo(animX.value - 1200f, tween(280))
                         onDelete()
                     }
                 },
@@ -368,7 +392,7 @@ private fun SwipeContent(
             FloatingActionButton(
                 onClick = {
                     coroutineScope.launch {
-                        offsetX.animateTo(offsetX.value + 1200f, tween(280))
+                        animX.animateTo(animX.value + 1200f, tween(280))
                         onKeep()
                     }
                 },
@@ -381,10 +405,12 @@ private fun SwipeContent(
         }
     }
 
-    // Reset animation state when photo key changes
     LaunchedEffect(currentPhoto.id) {
-        offsetX.snapTo(0f)
-        offsetY.snapTo(0f)
+        dragX = 0f
+        dragY = 0f
+        isDragging = false
+        animX.snapTo(0f)
+        animY.snapTo(0f)
     }
 }
 
