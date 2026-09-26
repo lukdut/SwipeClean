@@ -2,6 +2,7 @@ package com.lukdut.swipeclean.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -42,9 +43,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,10 +58,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -67,12 +73,20 @@ import coil.request.ImageRequest
 import coil.size.Size
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.SortOrder
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val SWIPE_THRESHOLD_FRACTION = 0.35f
 private const val ROTATION_MAX_DEG = 18f
+private const val DISMISS_DURATION_MS = 280
+
+private data class DismissedPhoto(
+    val photo: MediaPhoto,
+    val startOffset: Offset,
+    val keep: Boolean
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -220,7 +234,7 @@ private fun DoneContent(markedCount: Int, onOpenTrash: () -> Unit) {
 }
 
 @Composable
-private fun SwipeContent(
+internal fun SwipeContent(
     currentPhoto: MediaPhoto,
     nextPhoto: MediaPhoto?,
     progress: Pair<Int, Int>,
@@ -229,15 +243,41 @@ private fun SwipeContent(
     onPhotoTap: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    // mutableFloatStateOf for drag tracking — updated synchronously with no coroutine, avoiding race conditions
-    var dragX by remember(currentPhoto.id) { mutableStateOf(0f) }
-    var dragY by remember(currentPhoto.id) { mutableStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
-    val animX = remember(currentPhoto.id) { Animatable(0f) }
-    val animY = remember(currentPhoto.id) { Animatable(0f) }
-    // During drag use raw state, during animations use Animatable
-    val visualX = if (isDragging) dragX else animX.value
-    val visualY = if (isDragging) dragY else animY.value
+    val dismissedPhotos = remember { mutableStateListOf<DismissedPhoto>() }
+    var dragOffset by remember(currentPhoto.id) { mutableStateOf(Offset.Zero) }
+    var isDragging by remember(currentPhoto.id) { mutableStateOf(false) }
+    var isDismissed by remember(currentPhoto.id) { mutableStateOf(false) }
+    var returnAnimation by remember(currentPhoto.id) { mutableStateOf<Job?>(null) }
+    val animatedOffset = remember(currentPhoto.id) { Animatable(Offset.Zero, Offset.VectorConverter) }
+    val visualOffset = if (isDragging) dragOffset else animatedOffset.value
+
+    fun dismissPhoto(keep: Boolean) {
+        if (isDismissed) return
+        isDismissed = true
+        returnAnimation?.cancel()
+        dismissedPhotos += DismissedPhoto(
+            photo = currentPhoto,
+            startOffset = if (isDragging) dragOffset else animatedOffset.value,
+            keep = keep
+        )
+        // Advance immediately; the outgoing card finishes its animation independently.
+        if (keep) onKeep() else onDelete()
+    }
+
+    fun returnToCenter() {
+        if (isDismissed) return
+        val startOffset = dragOffset
+        returnAnimation?.cancel()
+        returnAnimation = coroutineScope.launch {
+            animatedOffset.snapTo(startOffset)
+            isDragging = false
+            animatedOffset.animateTo(Offset.Zero, spring(stiffness = Spring.StiffnessMedium))
+        }
+    }
+
+    DisposableEffect(currentPhoto.id) {
+        onDispose { returnAnimation?.cancel() }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -274,7 +314,7 @@ private fun SwipeContent(
             contentAlignment = Alignment.Center
         ) {
             val cardWidthPx = constraints.maxWidth.toFloat()
-            val swipeFraction = (visualX / (cardWidthPx * SWIPE_THRESHOLD_FRACTION))
+            val swipeFraction = (visualOffset.x / (cardWidthPx * SWIPE_THRESHOLD_FRACTION))
                 .coerceIn(-1f, 1f)
 
             // Back card — scale up as the front card moves away
@@ -288,83 +328,60 @@ private fun SwipeContent(
                 )
             }
 
-            // Front card — draggable
-            PhotoCard(
-                photo = currentPhoto,
-                swipeFraction = swipeFraction,
+            // Keep the touch target still while the photo moves underneath the finger.
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(visualX.roundToInt(), visualY.roundToInt()) }
-                    .graphicsLayer {
-                        rotationZ = (visualX / cardWidthPx) * ROTATION_MAX_DEG
-                    }
-                    .shadow(8.dp, RoundedCornerShape(20.dp))
                     .pointerInput("tap_${currentPhoto.id}") {
-                        detectTapGestures(onTap = { onPhotoTap() })
+                        detectTapGestures(onTap = { if (!isDismissed) onPhotoTap() })
                     }
-                    .pointerInput(currentPhoto.id) {
+                    .pointerInput(currentPhoto.id, cardWidthPx) {
                         detectDragGestures(
                             onDragStart = {
+                                returnAnimation?.cancel()
+                                if (!isDragging) dragOffset = animatedOffset.value
                                 isDragging = true
-                                dragX = animX.value
-                                dragY = animY.value
                             },
                             onDragEnd = {
-                                isDragging = false
                                 val threshold = cardWidthPx * SWIPE_THRESHOLD_FRACTION
-                                val capturedX = dragX
-                                val capturedY = dragY
-                                coroutineScope.launch {
-                                    when {
-                                        capturedX > threshold -> {
-                                            animX.snapTo(capturedX)
-                                            animY.snapTo(capturedY)
-                                            animX.animateTo(cardWidthPx * 1.6f, tween(280))
-                                            onKeep()
-                                        }
-                                        capturedX < -threshold -> {
-                                            animX.snapTo(capturedX)
-                                            animY.snapTo(capturedY)
-                                            animX.animateTo(-cardWidthPx * 1.6f, tween(280))
-                                            onDelete()
-                                        }
-                                        else -> {
-                                            animX.snapTo(capturedX)
-                                            animY.snapTo(capturedY)
-                                            launch {
-                                                animX.animateTo(
-                                                    0f, spring(stiffness = Spring.StiffnessMedium)
-                                                )
-                                            }
-                                            launch {
-                                                animY.animateTo(
-                                                    0f, spring(stiffness = Spring.StiffnessMedium)
-                                                )
-                                            }
-                                        }
-                                    }
+                                when {
+                                    dragOffset.x > threshold -> dismissPhoto(keep = true)
+                                    dragOffset.x < -threshold -> dismissPhoto(keep = false)
+                                    else -> returnToCenter()
                                 }
                             },
-                            onDragCancel = {
-                                isDragging = false
-                                val capturedX = dragX
-                                val capturedY = dragY
-                                coroutineScope.launch {
-                                    animX.snapTo(capturedX)
-                                    animY.snapTo(capturedY)
-                                    launch { animX.animateTo(0f) }
-                                    launch { animY.animateTo(0f) }
-                                }
-                            },
+                            onDragCancel = { returnToCenter() },
                             onDrag = { change, dragAmount ->
                                 change.consume()
-                                // Direct state update — no coroutine, no race condition
-                                dragX += dragAmount.x
-                                dragY += dragAmount.y
+                                dragOffset += dragAmount
                             }
                         )
                     }
-            )
+            ) {
+                if (!isDismissed) {
+                    PhotoCard(
+                        photo = currentPhoto,
+                        swipeFraction = swipeFraction,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .offset { IntOffset(visualOffset.x.roundToInt(), visualOffset.y.roundToInt()) }
+                            .graphicsLayer {
+                                rotationZ = (visualOffset.x / cardWidthPx) * ROTATION_MAX_DEG
+                            }
+                            .shadow(8.dp, RoundedCornerShape(20.dp))
+                    )
+                }
+            }
+
+            dismissedPhotos.forEach { dismissed ->
+                key(dismissed.photo.id) {
+                    DismissedPhotoCard(
+                        dismissed = dismissed,
+                        cardWidthPx = cardWidthPx,
+                        onFinished = { dismissedPhotos.remove(dismissed) }
+                    )
+                }
+            }
         }
 
         // Action buttons
@@ -376,12 +393,7 @@ private fun SwipeContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             FloatingActionButton(
-                onClick = {
-                    coroutineScope.launch {
-                        animX.animateTo(animX.value - 1200f, tween(280))
-                        onDelete()
-                    }
-                },
+                onClick = { dismissPhoto(keep = false) },
                 containerColor = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.size(68.dp)
@@ -390,12 +402,7 @@ private fun SwipeContent(
             }
 
             FloatingActionButton(
-                onClick = {
-                    coroutineScope.launch {
-                        animX.animateTo(animX.value + 1200f, tween(280))
-                        onKeep()
-                    }
-                },
+                onClick = { dismissPhoto(keep = true) },
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(68.dp)
@@ -404,14 +411,32 @@ private fun SwipeContent(
             }
         }
     }
+}
 
-    LaunchedEffect(currentPhoto.id) {
-        dragX = 0f
-        dragY = 0f
-        isDragging = false
-        animX.snapTo(0f)
-        animY.snapTo(0f)
+@Composable
+private fun DismissedPhotoCard(
+    dismissed: DismissedPhoto,
+    cardWidthPx: Float,
+    onFinished: () -> Unit
+) {
+    val offsetX = remember { Animatable(dismissed.startOffset.x) }
+    val direction = if (dismissed.keep) 1f else -1f
+
+    LaunchedEffect(dismissed, cardWidthPx) {
+        offsetX.animateTo(direction * cardWidthPx * 1.6f, tween(DISMISS_DURATION_MS))
+        onFinished()
     }
+
+    PhotoCard(
+        photo = dismissed.photo,
+        swipeFraction = (offsetX.value / (cardWidthPx * SWIPE_THRESHOLD_FRACTION)).coerceIn(-1f, 1f),
+        modifier = Modifier
+            .fillMaxSize()
+            .offset { IntOffset(offsetX.value.roundToInt(), dismissed.startOffset.y.roundToInt()) }
+            .graphicsLayer { rotationZ = (offsetX.value / cardWidthPx) * ROTATION_MAX_DEG }
+            .shadow(8.dp, RoundedCornerShape(20.dp))
+            .clearAndSetSemantics { }
+    )
 }
 
 @Composable
