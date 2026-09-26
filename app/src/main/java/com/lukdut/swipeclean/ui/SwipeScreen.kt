@@ -57,7 +57,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -284,24 +283,10 @@ internal fun SwipeContent(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         val (current, total) = progress
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "${current + 1} / $total",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
         LinearProgressIndicator(
             progress = { if (total > 0) (current + 1).toFloat() / total else 0f },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .height(4.dp)
         )
@@ -310,7 +295,7 @@ internal fun SwipeContent(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(top = 8.dp),
             contentAlignment = Alignment.Center
         ) {
             val cardWidthPx = constraints.maxWidth.toFloat()
@@ -368,7 +353,6 @@ internal fun SwipeContent(
                             .graphicsLayer {
                                 rotationZ = (visualOffset.x / cardWidthPx) * ROTATION_MAX_DEG
                             }
-                            .shadow(8.dp, RoundedCornerShape(20.dp))
                     )
                 }
             }
@@ -388,7 +372,7 @@ internal fun SwipeContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 48.dp, vertical = 20.dp),
+                .padding(horizontal = 32.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -396,18 +380,24 @@ internal fun SwipeContent(
                 onClick = { dismissPhoto(keep = false) },
                 containerColor = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(68.dp)
+                modifier = Modifier.size(60.dp)
             ) {
-                Icon(Icons.Default.Delete, contentDescription = "Удалить", modifier = Modifier.size(30.dp))
+                Icon(Icons.Default.Delete, contentDescription = "Удалить", modifier = Modifier.size(28.dp))
             }
+
+            Text(
+                text = "${current + 1} / $total",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             FloatingActionButton(
                 onClick = { dismissPhoto(keep = true) },
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(68.dp)
+                modifier = Modifier.size(60.dp)
             ) {
-                Icon(Icons.Default.Favorite, contentDescription = "Оставить", modifier = Modifier.size(30.dp))
+                Icon(Icons.Default.Favorite, contentDescription = "Оставить", modifier = Modifier.size(28.dp))
             }
         }
     }
@@ -434,7 +424,6 @@ private fun DismissedPhotoCard(
             .fillMaxSize()
             .offset { IntOffset(offsetX.value.roundToInt(), dismissed.startOffset.y.roundToInt()) }
             .graphicsLayer { rotationZ = (offsetX.value / cardWidthPx) * ROTATION_MAX_DEG }
-            .shadow(8.dp, RoundedCornerShape(20.dp))
             .clearAndSetSemantics { }
     )
 }
@@ -479,18 +468,14 @@ private fun PhotoCard(
     swipeFraction: Float = 0f
 ) {
     Box(
-        modifier = modifier.background(
-            MaterialTheme.colorScheme.surfaceVariant,
-            RoundedCornerShape(20.dp)
-        )
+        // Hide the next photo behind the fitted image's margins without a visible card frame.
+        modifier = modifier.background(MaterialTheme.colorScheme.background)
     ) {
         AsyncImage(
             model = photo.uri,
             contentDescription = photo.displayName,
             contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(20.dp))
+            modifier = Modifier.fillMaxSize()
         )
 
         // Delete overlay (swipe left)
