@@ -51,6 +51,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.lukdut.swipeclean.analysis.AnalysisProgress
 import com.lukdut.swipeclean.data.PhotoSettings
 import com.lukdut.swipeclean.data.Priority
 import com.lukdut.swipeclean.data.QualitySignal
@@ -272,11 +273,13 @@ private fun AnalysisCard(
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Анализ качества", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Запускается только вручную и может расходовать заряд. При сворачивании приложения приостанавливается. Результаты сохраняются на устройстве.",
+                "Запускается только вручную и может расходовать заряд. Продолжается при сворачивании приложения и выключенном экране. Приостановить можно здесь или в уведомлении. Результаты сохраняются на устройстве.",
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
                 when {
+                    analysis.stopping -> "Сохраняем результаты…"
+                    analysis.preparing -> "Подготавливаем фотографии…"
                     isLoading -> "Загружаем список фотографий…"
                     analysis.total == 0 -> "Нет фотографий для анализа"
                     analysis.analyzed == analysis.total -> "Все фото в очереди проанализированы"
@@ -301,8 +304,9 @@ private fun AnalysisCard(
             }
             Box(actionModifier.fillMaxWidth()) {
                 if (analysis.running) {
-                    OutlinedButton(onClick = onPause, modifier = Modifier.fillMaxWidth()) {
-                        Text("Приостановить")
+                    OutlinedButton(onClick = onPause, enabled = !analysis.stopping,
+                        modifier = Modifier.fillMaxWidth()) {
+                        Text(if (analysis.stopping) "Приостанавливаем…" else "Приостановить")
                     }
                 } else {
                     Button(

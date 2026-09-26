@@ -20,6 +20,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.lukdut.swipeclean.data.PhotoSettings
+import com.lukdut.swipeclean.analysis.AnalysisProgress
 import com.lukdut.swipeclean.data.SortOrder
 import com.lukdut.swipeclean.ui.theme.SwipeCleanTheme
 import org.junit.Assert.assertEquals

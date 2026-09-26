@@ -37,7 +37,7 @@ class AnalysisStorageTest {
         try {
             val photo = MediaPhoto(1L, Uri.parse("content://media/external/images/media/1"), "test", 100, 1234, 200)
             val entity = PhotoAnalysisEntity.from(photo, PhotoQuality(0.6f, 0f, 0.2f, 0f))
-            db.photoAnalysisDao().upsert(entity)
+            db.photoAnalysisDao().upsertAll(listOf(entity))
             val cached = db.photoAnalysisDao().getAll().single()
             assertEquals(entity, cached)
             assertTrue(cached.matches(photo))

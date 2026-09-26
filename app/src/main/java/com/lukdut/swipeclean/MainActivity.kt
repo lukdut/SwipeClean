@@ -2,6 +2,7 @@ package com.lukdut.swipeclean
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -27,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -43,9 +45,11 @@ import com.lukdut.swipeclean.ui.theme.SwipeCleanTheme
 class MainActivity : ComponentActivity() {
 
     private val viewModel: AppViewModel by viewModels()
+    private var analysisShortcut by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleAnalysisShortcut(intent)
         enableEdgeToEdge()
 
         setContent {
@@ -71,6 +75,21 @@ class MainActivity : ComponentActivity() {
                             viewModel.loadPhotos()
                         } else {
                             permissionDenied = true
+                        }
+                    }
+
+                    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.RequestPermission()
+                    ) {
+                        // Android permits foreground work even if notification permission is denied.
+                        viewModel.startAnalysis()
+                    }
+
+                    LaunchedEffect(analysisShortcut) {
+                        if (analysisShortcut > 0) {
+                            showTrash = false
+                            showSettings = true
+                            openSettingsAtAnalysis = true
                         }
                     }
 
@@ -135,7 +154,13 @@ class MainActivity : ComponentActivity() {
                             isLoading = isLoading,
                             onSortOrder = viewModel::setSortOrder,
                             onPriority = viewModel::setPriority,
-                            onStartAnalysis = viewModel::startAnalysis,
+                            onStartAnalysis = {
+                                if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                                        this@MainActivity, Manifest.permission.POST_NOTIFICATIONS
+                                    ) != PackageManager.PERMISSION_GRANTED) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else viewModel.startAnalysis()
+                            },
                             onPauseAnalysis = viewModel::pauseAnalysis,
                             onResetProgress = viewModel::resetProgress,
                             onBack = {
@@ -165,9 +190,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onStop() {
-        viewModel.pauseAnalysis()
-        super.onStop()
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleAnalysisShortcut(intent)
+    }
+
+    private fun handleAnalysisShortcut(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_ANALYSIS, false) == true) {
+            analysisShortcut++
+            intent.removeExtra(EXTRA_OPEN_ANALYSIS)
+        }
+    }
+
+    companion object {
+        const val EXTRA_OPEN_ANALYSIS = "open_analysis"
     }
 }
 

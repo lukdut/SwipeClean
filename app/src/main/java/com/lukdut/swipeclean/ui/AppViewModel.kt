@@ -7,9 +7,10 @@ import android.content.IntentSender
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.lukdut.swipeclean.analysis.AnalysisCoordinator
+import com.lukdut.swipeclean.analysis.AnalysisProgress
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.MediaStoreRepository
-import com.lukdut.swipeclean.data.PhotoAnalyzer
 import com.lukdut.swipeclean.data.PhotoQuality
 import com.lukdut.swipeclean.data.PhotoQueue
 import com.lukdut.swipeclean.data.PhotoSettings
@@ -37,17 +38,6 @@ import kotlinx.coroutines.sync.withLock
 
 private const val PRELOAD_AHEAD = 10
 
-/** Counts refer to the photos in the queue when the latest analysis pass started. */
-data class AnalysisProgress(
-    val total: Int = 0,
-    val analyzed: Int = 0,
-    val skipped: Int = 0,
-    val running: Boolean = false,
-    val error: String? = null
-) {
-    val remaining: Int get() = (total - analyzed - skipped).coerceAtLeast(0)
-}
-
 data class ProgressResetState(
     val running: Boolean = false,
     val completed: Boolean = false,
@@ -59,7 +49,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.getInstance(application)
     private val dao = database.photoReviewDao()
     private val analysisDao = database.photoAnalysisDao()
-    private val analyzer = PhotoAnalyzer(application.contentResolver)
     private val settingsRepository = SettingsRepository(
         application.getSharedPreferences("photo_settings", Context.MODE_PRIVATE)
     )
@@ -68,8 +57,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val reviewOverrides = mutableMapOf<Long, PhotoReviewStatus?>()
     private val analysisResults = mutableMapOf<Long, PhotoQuality>()
     private var loadJob: Job? = null
-    private var analysisJob: Job? = null
-    private var analysisGeneration = 0
+    private var photosLoaded = false
     private var loadGeneration = 0
     private var reviewVisible = false
     private var deleteRequestedIds: Set<Long> = emptySet()
@@ -113,11 +101,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val isDone = _queue.map { it.photos.isNotEmpty() && it.index >= it.photos.size }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    init {
+        viewModelScope.launch {
+            // Reconnect to saved results when a screen is recreated during background analysis.
+            combine(analysisDao.observeAll(), _allPhotos, _isLoading) { cached, photos, loading ->
+                Triple(cached, photos, loading)
+            }.collect { (cached, photos, loading) ->
+                if (photosLoaded && !loading) {
+                    applyCachedAnalysis(photos, cached)
+                    refreshAnalysisProgress()
+                    reorderQueue(preserveVisible = true)
+                }
+            }
+        }
+        viewModelScope.launch {
+            AnalysisCoordinator.progress.collect { refreshAnalysisProgress() }
+        }
+    }
+
     fun loadPhotos() {
         if (_progressReset.value.running) return
         val generation = ++loadGeneration
         loadJob?.cancel()
-        pauseAnalysis()
+        AnalysisCoordinator.clearFinishedProgress()
         loadJob = viewModelScope.launch {
             _isLoading.value = true
             _loadError.value = null
@@ -129,7 +135,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     (kept.associateWith { PhotoReviewStatus.KEPT } +
                         trash.associateWith { PhotoReviewStatus.TRASH }).toMutableMap()
                 }
-                val cached = analysisDao.getAll().associateBy { it.mediaStoreId }
+                val cached = analysisDao.getAll()
                 reviewOverrides.forEach { (id, status) ->
                     if (status == null) reviews.remove(id) else reviews[id] = status
                 }
@@ -138,13 +144,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _markedIds.value = photos.mapNotNull { photo ->
                     photo.id.takeIf { reviews[it] == PhotoReviewStatus.TRASH }
                 }.toSet()
-                analysisResults.clear()
-                photos.forEach { photo ->
-                    cached[photo.id]?.takeIf { it.matches(photo) }?.let {
-                        analysisResults[photo.id] = it.quality
-                    }
-                }
+                applyCachedAnalysis(photos, cached)
                 _queue.value = PhotoQueue(photos.filter { it.id !in reviews })
+                photosLoaded = true
                 reorderQueue(preserveVisible = false)
                 refreshAnalysisProgress()
             } catch (e: CancellationException) {
@@ -168,11 +170,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetProgress() {
         if (_isLoading.value || _progressReset.value.running || _pendingDeleteSender.value != null) return
-        pauseAnalysis()
         _progressReset.value = ProgressResetState(running = true)
         _isLoading.value = true
         viewModelScope.launch {
             try {
+                AnalysisCoordinator.pauseAndJoin()
+                AnalysisCoordinator.clearFinishedProgress()
+                applyCachedAnalysis(_allPhotos.value, analysisDao.getAll())
                 // Wait for pending swipe writes before clearing the saved decisions.
                 reviewMutex.withLock { dao.deleteAll() }
                 reviewOverrides.clear()
@@ -203,53 +207,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Only a user action starts analysis. Changing sort order, loading or resuming never does. */
     fun startAnalysis() {
-        if (_isLoading.value || analysisJob?.isActive == true) return
+        if (_isLoading.value || AnalysisCoordinator.progress.value?.running == true) return
         val candidates = _queue.value.let { it.photos.drop(it.index) }
-        if (candidates.isEmpty()) return
-        val missing = candidates.filter { it.id !in analysisResults }
-        _analysisProgress.value = AnalysisProgress(
-            total = candidates.size,
-            analyzed = candidates.size - missing.size,
-            running = missing.isNotEmpty()
-        )
-        if (missing.isEmpty()) return
-        val generation = ++analysisGeneration
-        analysisJob = viewModelScope.launch {
-            try {
-                missing.forEachIndexed { index, photo ->
-                    val quality = analyzer.analyze(photo)
-                    if (quality != null) {
-                        analysisDao.upsert(PhotoAnalysisEntity.from(photo, quality))
-                        analysisResults[photo.id] = quality
-                        _hasAnalysisResults.value = true
-                        _analysisProgress.update { it.copy(analyzed = it.analyzed + 1) }
-                    } else {
-                        _analysisProgress.update { it.copy(skipped = it.skipped + 1) }
-                    }
-                    // Batch sorting; the front and back cards stay fixed while the user swipes.
-                    if ((index + 1) % 16 == 0 || index == missing.lastIndex) {
-                        reorderQueue(preserveVisible = true)
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                _analysisProgress.update { it.copy(error = "Не удалось завершить анализ. Можно попробовать снова.") }
-            } finally {
-                if (generation == analysisGeneration) {
-                    _analysisProgress.update { it.copy(running = false) }
-                    reorderQueue(preserveVisible = true)
-                }
+        if (candidates.none { it.id !in analysisResults }) return
+        viewModelScope.launch {
+            // The service reads review decisions from Room to build its own queue.
+            reviewMutex.withLock {
+                if (!_isLoading.value) AnalysisCoordinator.start(getApplication(), candidates.size,
+                    candidates.count { it.id in analysisResults })
             }
         }
     }
 
     fun pauseAnalysis() {
-        analysisGeneration++
-        analysisJob?.cancel()
-        analysisJob = null
-        _analysisProgress.update { it.copy(running = false) }
-        reorderQueue(preserveVisible = true)
+        AnalysisCoordinator.pause()
     }
 
     fun setReviewVisible(visible: Boolean) {
@@ -257,15 +228,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refreshAnalysisProgress() {
+        val session = AnalysisCoordinator.progress.value
+        if (!photosLoaded) {
+            _analysisProgress.value = session ?: AnalysisProgress()
+            return
+        }
         _hasAnalysisResults.value = analysisResults.isNotEmpty()
         if (!_hasAnalysisResults.value && _settings.value.sortOrder == SortOrder.ByPotentiallyUnwanted) {
             setSortOrder(SortOrder.default)
         }
         val pending = _queue.value.let { it.photos.drop(it.index) }
-        _analysisProgress.value = AnalysisProgress(
+        _analysisProgress.value = session ?: AnalysisProgress(
             total = pending.size,
             analyzed = pending.count { it.id in analysisResults }
         )
+    }
+
+    private fun applyCachedAnalysis(photos: List<MediaPhoto>, cached: List<PhotoAnalysisEntity>) {
+        val byId = cached.associateBy { it.mediaStoreId }
+        analysisResults.clear()
+        photos.forEach { photo ->
+            byId[photo.id]?.takeIf { it.matches(photo) }?.let {
+                analysisResults[photo.id] = it.quality
+            }
+        }
     }
 
     private fun reorderQueue(preserveVisible: Boolean) {
@@ -305,7 +291,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _markedIds.update { it - ids }
         _queue.update { queue -> queue.restore(_allPhotos.value.filter { it.id in ids }) }
         reorderQueue(preserveVisible = true)
-        if (!_analysisProgress.value.running) refreshAnalysisProgress()
+        if (!_analysisProgress.value.running) {
+            AnalysisCoordinator.clearFinishedProgress()
+            refreshAnalysisProgress()
+        }
     }
 
     fun requestDelete(contentResolver: ContentResolver) {
@@ -344,8 +333,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             analysisResults.remove(it)
         }
         viewModelScope.launch {
+            AnalysisCoordinator.pauseAndJoin()
             reviewMutex.withLock { dao.deleteByIds(ids) }
             analysisDao.deleteByIds(ids)
+            AnalysisCoordinator.clearFinishedProgress()
+            refreshAnalysisProgress()
         }
         _markedIds.update { it - ids }
         _allPhotos.update { photos -> photos.filter { it.id !in ids } }
