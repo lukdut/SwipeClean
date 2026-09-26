@@ -478,11 +478,16 @@ private fun PhotoCard(
     modifier: Modifier = Modifier,
     swipeFraction: Float = 0f
 ) {
-    Box(modifier = modifier) {
+    Box(
+        modifier = modifier.background(
+            MaterialTheme.colorScheme.surfaceVariant,
+            RoundedCornerShape(20.dp)
+        )
+    ) {
         AsyncImage(
             model = photo.uri,
             contentDescription = photo.displayName,
-            contentScale = ContentScale.Crop,
+            contentScale = ContentScale.Fit,
             modifier = Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(20.dp))

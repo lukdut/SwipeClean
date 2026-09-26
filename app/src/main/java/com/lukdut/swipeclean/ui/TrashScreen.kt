@@ -196,10 +196,11 @@ private fun TrashPhotoItem(
         AsyncImage(
             model = photo.uri,
             contentDescription = photo.displayName,
-            contentScale = ContentScale.Crop,
+            contentScale = ContentScale.Fit,
             modifier = Modifier
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
                 .clickable(onClick = onOpen)
         )
 
