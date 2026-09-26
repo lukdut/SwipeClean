@@ -7,5 +7,6 @@ data class MediaPhoto(
     val uri: Uri,
     val displayName: String,
     val dateAdded: Long,
-    val size: Long
+    val size: Long,
+    val dateModified: Long = 0
 )

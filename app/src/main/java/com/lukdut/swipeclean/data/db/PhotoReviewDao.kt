@@ -22,6 +22,9 @@ interface PhotoReviewDao {
     @Query("DELETE FROM photo_review WHERE status = :status")
     suspend fun deleteAllByStatus(status: PhotoReviewStatus)
 
+    @Query("DELETE FROM photo_review")
+    suspend fun deleteAll()
+
     /** Удаляет записи о фото, которых больше нет в MediaStore. */
     @Query("DELETE FROM photo_review WHERE mediaStoreId NOT IN (:existingIds)")
     suspend fun deleteOrphans(existingIds: List<Long>)

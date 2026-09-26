@@ -26,7 +26,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,6 +41,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -63,7 +65,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -91,7 +97,9 @@ private data class DismissedPhoto(
 @Composable
 fun SwipeScreen(
     viewModel: AppViewModel,
-    onOpenTrash: () -> Unit
+    onOpenTrash: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenAnalysis: () -> Unit
 ) {
     val currentPhoto by viewModel.currentPhoto.collectAsState()
     val nextPhoto by viewModel.nextPhoto.collectAsState()
@@ -101,8 +109,17 @@ fun SwipeScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
     val photosToPreload by viewModel.photosToPreload.collectAsState()
+    val analysis by viewModel.analysisProgress.collectAsState()
+    val hasAnalysisResults by viewModel.hasAnalysisResults.collectAsState()
+    val priorityReason by viewModel.priorityReason.collectAsState()
+    val loadError by viewModel.loadError.collectAsState()
 
     var viewerPhoto by remember { mutableStateOf<MediaPhoto?>(null) }
+
+    DisposableEffect(viewModel) {
+        viewModel.setReviewVisible(true)
+        onDispose { viewModel.setReviewVisible(false) }
+    }
 
     val context = LocalContext.current
     LaunchedEffect(photosToPreload) {
@@ -125,29 +142,55 @@ fun SwipeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("SwipeClean", fontWeight = FontWeight.Bold) },
-                actions = {
-                    SortMenu(
-                        current = sortOrder,
-                        onSelect = { viewModel.setSortOrder(it) }
-                    )
-                    BadgedBox(
-                        badge = {
-                            if (markedCount > 0) {
-                                Badge { Text(markedCount.toString()) }
+            Column {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Default.Settings, contentDescription = "Настройки")
+                        }
+                    },
+                    title = {
+                        SortMenu(
+                            current = sortOrder,
+                            hasAnalysisResults = hasAnalysisResults,
+                            onSelect = viewModel::setSortOrder,
+                            onOpenAnalysis = onOpenAnalysis
+                        )
+                    },
+                    actions = {
+                        BadgedBox(
+                            badge = {
+                                if (markedCount > 0) {
+                                    Badge { Text(markedCount.toString()) }
+                                }
+                            }
+                        ) {
+                            IconButton(onClick = onOpenTrash) {
+                                Icon(Icons.Default.Delete, contentDescription = "Корзина")
                             }
                         }
-                    ) {
-                        IconButton(onClick = onOpenTrash) {
-                            Icon(Icons.Default.Delete, contentDescription = "Корзина")
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+                if (sortOrder == SortOrder.ByPotentiallyUnwanted || analysis.running) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = if (analysis.running) "Анализ: ${analysis.analyzed} из ${analysis.total}"
+                                else "Оценено фото: ${analysis.analyzed} из ${analysis.total}",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(onClick = onOpenAnalysis) { Text("Анализ") }
+                    }
+                }
+            }
         }
     ) { padding ->
         Box(
@@ -158,6 +201,10 @@ fun SwipeScreen(
         ) {
             when {
                 isLoading -> CircularProgressIndicator()
+                loadError != null -> Column(Modifier.padding(24.dp)) {
+                    Text(loadError!!)
+                    TextButton(onClick = viewModel::loadPhotos) { Text("Повторить") }
+                }
                 isDone -> DoneContent(markedCount = markedCount, onOpenTrash = onOpenTrash)
                 currentPhoto != null -> SwipeContent(
                     currentPhoto = currentPhoto!!,
@@ -165,7 +212,8 @@ fun SwipeScreen(
                     progress = progress,
                     onDelete = { viewModel.markForDeletion() },
                     onKeep = { viewModel.keep() },
-                    onPhotoTap = { viewerPhoto = currentPhoto }
+                    onPhotoTap = { viewerPhoto = currentPhoto },
+                    priorityReason = priorityReason
                 )
                 else -> EmptyContent()
             }
@@ -239,7 +287,8 @@ internal fun SwipeContent(
     progress: Pair<Int, Int>,
     onDelete: () -> Unit,
     onKeep: () -> Unit,
-    onPhotoTap: () -> Unit
+    onPhotoTap: () -> Unit,
+    priorityReason: String? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val dismissedPhotos = remember { mutableStateListOf<DismissedPhoto>() }
@@ -290,6 +339,15 @@ internal fun SwipeContent(
                 .clip(RoundedCornerShape(4.dp))
                 .height(4.dp)
         )
+
+        priorityReason?.let {
+            Text(
+                it,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
 
         BoxWithConstraints(
             modifier = Modifier
@@ -429,34 +487,59 @@ private fun DismissedPhotoCard(
 }
 
 @Composable
-private fun SortMenu(
+internal fun SortMenu(
     current: SortOrder,
-    onSelect: (SortOrder) -> Unit
+    hasAnalysisResults: Boolean,
+    onSelect: (SortOrder) -> Unit,
+    onOpenAnalysis: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    IconButton(onClick = { expanded = true }) {
-        Icon(Icons.Default.Sort, contentDescription = "Сортировка")
-    }
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = { expanded = false }
-    ) {
-        SortOrder.all.forEach { order ->
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        order.label,
-                        fontWeight = if (order == current) FontWeight.Bold else FontWeight.Normal,
-                        color = if (order == current) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface
-                    )
-                },
-                onClick = {
-                    expanded = false
-                    onSelect(order)
-                }
+    Box {
+        TextButton(
+            onClick = { expanded = true },
+            modifier = Modifier.semantics {
+                contentDescription = "Сортировка"
+                stateDescription = current.label
+            }
+        ) {
+            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                current.label,
+                modifier = Modifier.weight(1f, fill = false),
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            SortOrder.all.forEach { order ->
+                val needsAnalysis = order == SortOrder.ByPotentiallyUnwanted && !hasAnalysisResults
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            order.label,
+                            fontWeight = if (order == current) FontWeight.Bold else FontWeight.Normal,
+                            color = when {
+                                needsAnalysis -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                order == current -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurface
+                            }
+                        )
+                    },
+                    modifier = Modifier.semantics {
+                        if (needsAnalysis) stateDescription = "Сначала выполните анализ в настройках"
+                    },
+                    onClick = {
+                        expanded = false
+                        if (needsAnalysis) onOpenAnalysis() else onSelect(order)
+                    }
+                )
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -27,6 +28,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.lukdut.swipeclean.ui.AppViewModel
 import com.lukdut.swipeclean.ui.SwipeScreen
+import com.lukdut.swipeclean.ui.SettingsScreen
 import com.lukdut.swipeclean.ui.TrashScreen
 import com.lukdut.swipeclean.ui.theme.SwipeCleanTheme
 
@@ -48,7 +51,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             SwipeCleanTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    var showTrash by remember { mutableStateOf(false) }
+                    var showTrash by rememberSaveable { mutableStateOf(false) }
+                    var showSettings by rememberSaveable { mutableStateOf(false) }
+                    var openSettingsAtAnalysis by rememberSaveable { mutableStateOf(false) }
                     var permissionGranted by remember { mutableStateOf(false) }
                     var permissionDenied by remember { mutableStateOf(false) }
 
@@ -81,6 +86,16 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val pendingDeleteSender by viewModel.pendingDeleteSender.collectAsState()
+                    val settings by viewModel.settings.collectAsState()
+                    val analysis by viewModel.analysisProgress.collectAsState()
+                    val hasAnalysisResults by viewModel.hasAnalysisResults.collectAsState()
+                    val progressReset by viewModel.progressReset.collectAsState()
+                    val isLoading by viewModel.isLoading.collectAsState()
+                    BackHandler(enabled = showTrash || showSettings) {
+                        showTrash = false
+                        showSettings = false
+                        openSettingsAtAnalysis = false
+                    }
                     LaunchedEffect(pendingDeleteSender) {
                         pendingDeleteSender?.let { sender ->
                             deleteLauncher.launch(IntentSenderRequest.Builder(sender).build())
@@ -111,18 +126,48 @@ class MainActivity : ComponentActivity() {
                         !permissionGranted -> {
                             // Waiting for permission dialog — show nothing (or a brief splash)
                         }
+                        showSettings -> SettingsScreen(
+                            settings = settings,
+                            analysis = analysis,
+                            hasAnalysisResults = hasAnalysisResults,
+                            openAtAnalysis = openSettingsAtAnalysis,
+                            progressReset = progressReset,
+                            isLoading = isLoading,
+                            onSortOrder = viewModel::setSortOrder,
+                            onPriority = viewModel::setPriority,
+                            onStartAnalysis = viewModel::startAnalysis,
+                            onPauseAnalysis = viewModel::pauseAnalysis,
+                            onResetProgress = viewModel::resetProgress,
+                            onBack = {
+                                showSettings = false
+                                openSettingsAtAnalysis = false
+                            }
+                        )
                         showTrash -> TrashScreen(
                             viewModel = viewModel,
                             onBack = { showTrash = false }
                         )
                         else -> SwipeScreen(
                             viewModel = viewModel,
-                            onOpenTrash = { showTrash = true }
+                            onOpenTrash = { showTrash = true },
+                            onOpenSettings = {
+                                openSettingsAtAnalysis = false
+                                showSettings = true
+                            },
+                            onOpenAnalysis = {
+                                openSettingsAtAnalysis = true
+                                showSettings = true
+                            }
                         )
                     }
                 }
             }
         }
+    }
+
+    override fun onStop() {
+        viewModel.pauseAnalysis()
+        super.onStop()
     }
 }
 

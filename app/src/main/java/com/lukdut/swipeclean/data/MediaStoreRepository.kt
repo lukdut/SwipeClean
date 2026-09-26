@@ -8,7 +8,7 @@ import kotlinx.coroutines.withContext
 
 class MediaStoreRepository(private val context: Context) {
 
-    suspend fun loadAllPhotos(sortOrder: SortOrder = SortOrder.default): List<MediaPhoto> =
+    suspend fun loadAllPhotos(): List<MediaPhoto> =
         withContext(Dispatchers.IO) {
         val photos = mutableListOf<MediaPhoto>()
 
@@ -16,7 +16,8 @@ class MediaStoreRepository(private val context: Context) {
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.DATE_ADDED,
-            MediaStore.Images.Media.SIZE
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.DATE_MODIFIED
         )
 
         context.contentResolver.query(
@@ -24,12 +25,13 @@ class MediaStoreRepository(private val context: Context) {
             projection,
             null,
             null,
-            sortOrder.sqlOrder
+            "${MediaStore.Images.Media.DATE_ADDED} DESC, ${MediaStore.Images.Media._ID} DESC"
         )?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+            val modifiedCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -41,7 +43,8 @@ class MediaStoreRepository(private val context: Context) {
                         ),
                         displayName = cursor.getString(nameCol) ?: "",
                         dateAdded = cursor.getLong(dateCol),
-                        size = cursor.getLong(sizeCol)
+                        size = cursor.getLong(sizeCol),
+                        dateModified = cursor.getLong(modifiedCol)
                     )
                 )
             }
