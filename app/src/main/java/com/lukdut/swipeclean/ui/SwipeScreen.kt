@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
@@ -61,15 +62,18 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import android.util.Log
 import coil.compose.AsyncImage
 import coil.imageLoader
+import coil.memory.MemoryCache
 import coil.request.ImageRequest
-import coil.size.Size
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.SortOrder
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+private const val TAG = "SwipeClean"
 
 private const val SWIPE_THRESHOLD_FRACTION = 0.35f
 private const val ROTATION_MAX_DEG = 18f
@@ -94,12 +98,20 @@ fun SwipeScreen(
     val context = LocalContext.current
     LaunchedEffect(photosToPreload) {
         photosToPreload.forEach { photo ->
-            val request = ImageRequest.Builder(context)
-                .data(photo.uri)
-                .size(Size.ORIGINAL)
-                .memoryCacheKey(photo.uri.toString())
-                .build()
-            context.imageLoader.enqueue(request)
+            val cacheKey = MemoryCache.Key(photo.uri.toString())
+            val alreadyCached = context.imageLoader.memoryCache?.get(cacheKey) != null
+            Log.d(TAG, "Preload id=${photo.id} alreadyCached=$alreadyCached")
+            if (!alreadyCached) {
+                val request = ImageRequest.Builder(context)
+                    .data(photo.uri)
+                    .memoryCacheKey(photo.uri.toString())
+                    .listener(
+                        onSuccess = { _, _ -> Log.d(TAG, "Preload SUCCESS id=${photo.id}") },
+                        onError = { _, r -> Log.w(TAG, "Preload ERROR id=${photo.id}: ${r.throwable}") }
+                    )
+                    .build()
+                context.imageLoader.enqueue(request)
+            }
         }
     }
 
@@ -229,13 +241,29 @@ private fun SwipeContent(
     onPhotoTap: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    // mutableFloatStateOf for drag tracking — updated synchronously with no coroutine, avoiding race conditions
-    var dragX by remember(currentPhoto.id) { mutableStateOf(0f) }
-    var dragY by remember(currentPhoto.id) { mutableStateOf(0f) }
+    val context = LocalContext.current
+
+    // Stable gesture state — no key, reset via LaunchedEffect.
+    // Must be stable so pointerInput with a constant key can always read the current value.
+    var dragX by remember { mutableStateOf(0f) }
+    var dragY by remember { mutableStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
+    var isCurrentImageLoaded by remember { mutableStateOf(false) }
+    // Prevents a second button press from cancelling the first animation and dropping the action.
+    var actionInProgress by remember { mutableStateOf(false) }
+
+    // Keyed animation state — fresh Animatable for each photo.
     val animX = remember(currentPhoto.id) { Animatable(0f) }
     val animY = remember(currentPhoto.id) { Animatable(0f) }
-    // During drag use raw state, during animations use Animatable
+
+    // Stable State refs — always hold the latest value, safe to read inside pointerInput("drag").
+    val animXRef = rememberUpdatedState(animX)
+    val animYRef = rememberUpdatedState(animY)
+    val onKeepRef = rememberUpdatedState(onKeep)
+    val onDeleteRef = rememberUpdatedState(onDelete)
+    val onPhotoTapRef = rememberUpdatedState(onPhotoTap)
+
+    // During drag use raw state; during animations use Animatable.
     val visualX = if (isDragging) dragX else animX.value
     val visualY = if (isDragging) dragY else animY.value
 
@@ -274,6 +302,8 @@ private fun SwipeContent(
             contentAlignment = Alignment.Center
         ) {
             val cardWidthPx = constraints.maxWidth.toFloat()
+            // Stable ref so pointerInput("drag") reads the current width after rotation.
+            val cardWidthPxRef = rememberUpdatedState(cardWidthPx)
             val swipeFraction = (visualX / (cardWidthPx * SWIPE_THRESHOLD_FRACTION))
                 .coerceIn(-1f, 1f)
 
@@ -282,16 +312,21 @@ private fun SwipeContent(
                 val backScale = 0.92f + 0.08f * abs(swipeFraction).coerceIn(0f, 1f)
                 PhotoCard(
                     photo = nextPhoto,
+                    onImageLoaded = { Log.d(TAG, "Back card loaded id=${nextPhoto.id}") },
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer { scaleX = backScale; scaleY = backScale }
                 )
             }
 
-            // Front card — draggable
+            // Front card — draggable.
+            // Keys "tap" and "drag" are constant strings — these pointerInput nodes
+            // NEVER restart, eliminating the 1-frame gap on photo change.
+            // All mutable values are read via stable State refs or stable MutableState delegates.
             PhotoCard(
                 photo = currentPhoto,
                 swipeFraction = swipeFraction,
+                onImageLoaded = { isCurrentImageLoaded = true },
                 modifier = Modifier
                     .fillMaxSize()
                     .offset { IntOffset(visualX.roundToInt(), visualY.roundToInt()) }
@@ -299,68 +334,80 @@ private fun SwipeContent(
                         rotationZ = (visualX / cardWidthPx) * ROTATION_MAX_DEG
                     }
                     .shadow(8.dp, RoundedCornerShape(20.dp))
-                    .pointerInput("tap_${currentPhoto.id}") {
-                        detectTapGestures(onTap = { onPhotoTap() })
+                    .pointerInput("tap") {
+                        detectTapGestures(onTap = { if (isCurrentImageLoaded) onPhotoTapRef.value() })
                     }
-                    .pointerInput(currentPhoto.id) {
+                    .pointerInput("drag") {
                         detectDragGestures(
                             onDragStart = {
-                                isDragging = true
-                                dragX = animX.value
-                                dragY = animY.value
+                                if (isCurrentImageLoaded) {
+                                    isDragging = true
+                                    dragX = animXRef.value.value
+                                    dragY = animYRef.value.value
+                                }
                             },
                             onDragEnd = {
-                                isDragging = false
-                                val threshold = cardWidthPx * SWIPE_THRESHOLD_FRACTION
-                                val capturedX = dragX
-                                val capturedY = dragY
-                                coroutineScope.launch {
-                                    when {
-                                        capturedX > threshold -> {
-                                            animX.snapTo(capturedX)
-                                            animY.snapTo(capturedY)
-                                            animX.animateTo(cardWidthPx * 1.6f, tween(280))
-                                            onKeep()
-                                        }
-                                        capturedX < -threshold -> {
-                                            animX.snapTo(capturedX)
-                                            animY.snapTo(capturedY)
-                                            animX.animateTo(-cardWidthPx * 1.6f, tween(280))
-                                            onDelete()
-                                        }
-                                        else -> {
-                                            animX.snapTo(capturedX)
-                                            animY.snapTo(capturedY)
-                                            launch {
-                                                animX.animateTo(
-                                                    0f, spring(stiffness = Spring.StiffnessMedium)
-                                                )
+                                if (isDragging) {
+                                    isDragging = false
+                                    val cw = cardWidthPxRef.value
+                                    val threshold = cw * SWIPE_THRESHOLD_FRACTION
+                                    val capturedX = dragX
+                                    val capturedY = dragY
+                                    val ax = animXRef.value
+                                    val ay = animYRef.value
+                                    coroutineScope.launch {
+                                        when {
+                                            capturedX > threshold -> {
+                                                ax.snapTo(capturedX)
+                                                ay.snapTo(capturedY)
+                                                ax.animateTo(cw * 1.6f, tween(280))
+                                                onKeepRef.value()
                                             }
-                                            launch {
-                                                animY.animateTo(
-                                                    0f, spring(stiffness = Spring.StiffnessMedium)
-                                                )
+                                            capturedX < -threshold -> {
+                                                ax.snapTo(capturedX)
+                                                ay.snapTo(capturedY)
+                                                ax.animateTo(-cw * 1.6f, tween(280))
+                                                onDeleteRef.value()
+                                            }
+                                            else -> {
+                                                ax.snapTo(capturedX)
+                                                ay.snapTo(capturedY)
+                                                launch {
+                                                    ax.animateTo(
+                                                        0f, spring(stiffness = Spring.StiffnessMedium)
+                                                    )
+                                                }
+                                                launch {
+                                                    ay.animateTo(
+                                                        0f, spring(stiffness = Spring.StiffnessMedium)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
                             },
                             onDragCancel = {
-                                isDragging = false
-                                val capturedX = dragX
-                                val capturedY = dragY
-                                coroutineScope.launch {
-                                    animX.snapTo(capturedX)
-                                    animY.snapTo(capturedY)
-                                    launch { animX.animateTo(0f) }
-                                    launch { animY.animateTo(0f) }
+                                if (isDragging) {
+                                    isDragging = false
+                                    val capturedX = dragX
+                                    val capturedY = dragY
+                                    val ax = animXRef.value
+                                    val ay = animYRef.value
+                                    coroutineScope.launch {
+                                        ax.snapTo(capturedX)
+                                        ay.snapTo(capturedY)
+                                        launch { ax.animateTo(0f) }
+                                        launch { ay.animateTo(0f) }
+                                    }
                                 }
                             },
                             onDrag = { change, dragAmount ->
                                 change.consume()
-                                // Direct state update — no coroutine, no race condition
-                                dragX += dragAmount.x
-                                dragY += dragAmount.y
+                                if (isDragging) {
+                                    dragX += dragAmount.x
+                                    dragY += dragAmount.y
+                                }
                             }
                         )
                     }
@@ -377,8 +424,10 @@ private fun SwipeContent(
         ) {
             FloatingActionButton(
                 onClick = {
+                    if (!isCurrentImageLoaded || actionInProgress) return@FloatingActionButton
+                    actionInProgress = true
                     coroutineScope.launch {
-                        animX.animateTo(animX.value - 1200f, tween(280))
+                        animX.animateTo(animX.value - 1200f, tween(250))
                         onDelete()
                     }
                 },
@@ -391,8 +440,10 @@ private fun SwipeContent(
 
             FloatingActionButton(
                 onClick = {
+                    if (!isCurrentImageLoaded || actionInProgress) return@FloatingActionButton
+                    actionInProgress = true
                     coroutineScope.launch {
-                        animX.animateTo(animX.value + 1200f, tween(280))
+                        animX.animateTo(animX.value + 1200f, tween(250))
                         onKeep()
                     }
                 },
@@ -406,11 +457,14 @@ private fun SwipeContent(
     }
 
     LaunchedEffect(currentPhoto.id) {
+        isDragging = false
         dragX = 0f
         dragY = 0f
-        isDragging = false
-        animX.snapTo(0f)
-        animY.snapTo(0f)
+        actionInProgress = false
+        val cached = context.imageLoader.memoryCache
+            ?.get(MemoryCache.Key(currentPhoto.uri.toString())) != null
+        Log.d(TAG, "Front card id=${currentPhoto.id} inMemoryCache=$cached")
+        isCurrentImageLoaded = cached
     }
 }
 
@@ -451,17 +505,47 @@ private fun SortMenu(
 private fun PhotoCard(
     photo: MediaPhoto,
     modifier: Modifier = Modifier,
-    swipeFraction: Float = 0f
+    swipeFraction: Float = 0f,
+    onImageLoaded: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    var imageLoaded by remember(photo.id) {
+        val cached = context.imageLoader.memoryCache
+            ?.get(MemoryCache.Key(photo.uri.toString())) != null
+        mutableStateOf(cached)
+    }
+
     Box(modifier = modifier) {
         AsyncImage(
-            model = photo.uri,
+            model = ImageRequest.Builder(context)
+                .data(photo.uri)
+                .memoryCacheKey(photo.uri.toString())
+                .build(),
             contentDescription = photo.displayName,
             contentScale = ContentScale.Crop,
+            onSuccess = {
+                Log.d(TAG, "AsyncImage onSuccess id=${photo.id}")
+                imageLoaded = true
+                onImageLoaded()
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(20.dp))
         )
+
+        if (!imageLoaded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
 
         // Delete overlay (swipe left)
         if (swipeFraction < -0.05f) {
