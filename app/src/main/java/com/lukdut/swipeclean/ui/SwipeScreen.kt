@@ -6,6 +6,7 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -65,6 +67,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -175,19 +178,23 @@ fun SwipeScreen(
                     )
                 )
                 if (sortOrder == SortOrder.ByPotentiallyUnwanted || analysis.running) {
+                    val completed = analysis.analyzed + analysis.skipped
+                    val percent = if (analysis.total > 0) completed.toLong() * 100 / analysis.total else 0
+                    val status = if (!analysis.running && analysis.remaining > 0) "приостановлено" else "$percent%"
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.Button, onClickLabel = "Открыть настройки анализа",
+                                onClick = onOpenAnalysis)
+                            .heightIn(min = 48.dp)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (analysis.running) "Анализ: ${analysis.analyzed} из ${analysis.total}"
-                                else "Оценено фото: ${analysis.analyzed} из ${analysis.total}",
-                            modifier = Modifier.weight(1f),
+                            text = "Анализ: $completed из ${analysis.total} ($status)",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        TextButton(onClick = onOpenAnalysis) { Text("Анализ") }
                     }
                 }
             }
@@ -525,7 +532,6 @@ internal fun SortMenu(
                             order.label,
                             fontWeight = if (order == current) FontWeight.Bold else FontWeight.Normal,
                             color = when {
-                                needsAnalysis -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                 order == current -> MaterialTheme.colorScheme.primary
                                 else -> MaterialTheme.colorScheme.onSurface
                             }

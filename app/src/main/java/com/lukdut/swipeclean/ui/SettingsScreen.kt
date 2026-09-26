@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -28,7 +29,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -153,17 +153,12 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            val unavailableColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                             RadioButton(
                                 selected = settings.sortOrder == order,
-                                onClick = null,
-                                colors = RadioButtonDefaults.colors(
-                                    unselectedColor = if (needsAnalysis) unavailableColor
-                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                onClick = null
                             )
                             Text(order.label, style = MaterialTheme.typography.bodyLarge,
-                                color = if (needsAnalysis) unavailableColor else MaterialTheme.colorScheme.onSurface)
+                                color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -304,8 +299,15 @@ private fun AnalysisCard(
             }
             Box(actionModifier.fillMaxWidth()) {
                 if (analysis.running) {
-                    OutlinedButton(onClick = onPause, enabled = !analysis.stopping,
-                        modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = onPause,
+                        enabled = !analysis.stopping,
+                        colors = ButtonDefaults.buttonColors(
+                            disabledContainerColor = MaterialTheme.colorScheme.primary,
+                            disabledContentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Text(if (analysis.stopping) "Приостанавливаем…" else "Приостановить")
                     }
                 } else {
