@@ -1,5 +1,7 @@
 package com.lukdut.swipeclean.ui
 
+import android.text.format.DateFormat
+import android.text.format.Formatter
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
@@ -60,6 +62,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,6 +89,7 @@ import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.SortOrder
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import java.util.Date
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -483,6 +487,19 @@ internal fun SwipeContent(
                     )
                 }
             }
+
+            PhotoMetadata(
+                photo = currentPhoto,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+
+            OpenInGalleryButton(
+                photo = currentPhoto,
+                enabled = actionsEnabled && !isDismissed,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+            )
         }
 
         // Action buttons
@@ -531,6 +548,50 @@ internal fun SwipeContent(
             }
         }
     }
+}
+
+@Composable
+private fun PhotoMetadata(photo: MediaPhoto, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val dateText = remember(photo.dateTaken, photo.dateAdded, configuration) {
+        // MediaStore stores DATE_TAKEN in milliseconds and DATE_ADDED in seconds.
+        val timestamp = when {
+            photo.dateTaken > 0L -> photo.dateTaken
+            photo.dateAdded > 0L -> photo.dateAdded * 1_000L
+            else -> null
+        }
+        timestamp?.let { DateFormat.getDateFormat(context).format(Date(it)) } ?: "Дата неизвестна"
+    }
+    val sizeText = remember(photo.size, configuration) {
+        if (photo.size > 0L) Formatter.formatShortFileSize(context, photo.size) else "Размер неизвестен"
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PhotoMetadataLabel(dateText, Modifier.weight(1f, fill = false))
+        Spacer(Modifier.width(8.dp))
+        PhotoMetadataLabel(sizeText, Modifier.weight(1f, fill = false))
+    }
+}
+
+@Composable
+private fun PhotoMetadataLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = Color.White,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
 }
 
 @Composable
