@@ -20,6 +20,14 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.lukdut.swipeclean.data.PhotoSettings
+import com.lukdut.swipeclean.data.TestModelFixture
+import com.lukdut.swipeclean.data.model.ModelState
+import com.lukdut.swipeclean.data.model.InstalledModel
+import com.lukdut.swipeclean.data.model.ModelDownloadProgress
+import com.lukdut.swipeclean.data.model.ModelDownloadStage
+import androidx.test.core.app.ApplicationProvider
+import android.content.Context
+import java.io.File
 import com.lukdut.swipeclean.analysis.AnalysisProgress
 import com.lukdut.swipeclean.data.SortOrder
 import com.lukdut.swipeclean.ui.theme.SwipeCleanTheme
@@ -31,9 +39,51 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SettingsScreenTest {
     @get:Rule val compose = createComposeRule()
+    private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val installedModel = ModelState(initializing = false,
+        installed = InstalledModel(TestModelFixture.spec(context), File(context.cacheDir, "ui-model.onnx")))
     private var starts = 0
     private var pauses = 0
     private var resets = 0
+    private var forgotten = 0
+
+    @Test
+    fun personalPriorityAndHistoryResetDoNotStartAnalysis() {
+        showSettings(AnalysisProgress(total = 100))
+        compose.onNodeWithContentDescription("Похожие фотографии: Выкл.").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Похожие фотографии: Выкл.").assertIsSelected()
+        compose.onNodeWithText("Очистить историю рекомендаций").performScrollTo().performClick()
+        compose.onNodeWithText("Очистить историю рекомендаций?").assertExists()
+        compose.runOnIdle { assertEquals(0, forgotten) }
+        compose.onNodeWithText("Очистить").performClick()
+        compose.runOnIdle { assertEquals(1, forgotten); assertEquals(0, starts) }
+    }
+
+    @Test fun firstAnalysisExplainsDownloadAndRequiresExplicitTap() {
+        showSettings(AnalysisProgress(total = 10), model = ModelState(initializing = false,
+            bundled = TestModelFixture.spec(context)))
+        compose.onNodeWithText("Скачать модель и анализировать").performScrollTo().assertIsEnabled()
+        compose.runOnIdle { assertEquals(0, starts) }
+        compose.onNodeWithText("Скачать модель и анализировать").performClick()
+        compose.runOnIdle { assertEquals(1, starts) }
+    }
+
+    @Test fun interruptedDownloadOffersRetryWithoutStartingAutomatically() {
+        showSettings(AnalysisProgress(total = 10, error = "Нет сети"), model = ModelState(initializing = false,
+            bundled = TestModelFixture.spec(context)))
+        compose.onNodeWithText("Повторить загрузку модели").performScrollTo().assertIsEnabled()
+        compose.runOnIdle { assertEquals(0, starts) }
+        compose.onNodeWithText("Повторить загрузку модели").performClick()
+        compose.runOnIdle { assertEquals(1, starts) }
+    }
+
+    @Test fun downloadingShowsByteProgressAndCanBeCancelled() {
+        val download = ModelDownloadProgress(ModelDownloadStage.DOWNLOADING, 10 * 1_048_576, 90 * 1_048_576)
+        showSettings(AnalysisProgress(total = 10, running = true, preparing = true, modelDownload = download))
+        compose.onNodeWithText(download.label).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Приостановить").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, pauses); assertEquals(0, starts) }
+    }
 
     @Test
     fun selectingSmartSortAndPrioritiesDoesNotStartAnalysis() {
@@ -87,7 +137,7 @@ class SettingsScreenTest {
         compose.runOnIdle { assertEquals(1, starts) }
     }
 
-    private fun showSettings(progress: AnalysisProgress, openAtAnalysis: Boolean = false, compact: Boolean = false) {
+    private fun showSettings(progress: AnalysisProgress, openAtAnalysis: Boolean = false, compact: Boolean = false, model: ModelState = installedModel) {
         compose.setContent {
             var settings by remember { mutableStateOf(PhotoSettings()) }
             var analysis by remember { mutableStateOf(progress) }
@@ -95,11 +145,14 @@ class SettingsScreenTest {
             SwipeCleanTheme {
                 Box(if (compact) Modifier.height(400.dp) else Modifier.fillMaxSize()) {
                     SettingsScreen(
+                        modelState = model,
                         settings = settings, analysis = analysis, progressReset = reset, isLoading = false,
                         hasAnalysisResults = progress.analyzed > 0,
                         openAtAnalysis = openAtAnalysis,
                         onSortOrder = { settings = settings.copy(sortOrder = it) },
                         onPriority = { signal, priority -> settings = settings.withPriority(signal, priority) },
+                        onPersonalization = { settings = settings.copy(personalization = it) },
+                        onForgetFeedback = { forgotten++ },
                         onStartAnalysis = { starts++ },
                         onPauseAnalysis = { pauses++; analysis = analysis.copy(running = false) },
                         onResetProgress = { resets++; reset = ProgressResetState(completed = true) },

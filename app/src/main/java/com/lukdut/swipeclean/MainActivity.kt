@@ -78,11 +78,21 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    var pendingModelUpdate by rememberSaveable { mutableStateOf(false) }
                     val notificationPermissionLauncher = rememberLauncherForActivityResult(
                         ActivityResultContracts.RequestPermission()
                     ) {
                         // Android permits foreground work even if notification permission is denied.
-                        viewModel.startAnalysis()
+                        viewModel.startAnalysis(updateModel = pendingModelUpdate)
+                    }
+
+                    val startAnalysis: (Boolean) -> Unit = { updateModel ->
+                        pendingModelUpdate = updateModel
+                        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                                this@MainActivity, Manifest.permission.POST_NOTIFICATIONS
+                            ) != PackageManager.PERMISSION_GRANTED) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else viewModel.startAnalysis(updateModel)
                     }
 
                     LaunchedEffect(analysisShortcut) {
@@ -107,8 +117,11 @@ class MainActivity : ComponentActivity() {
                     val pendingDeleteSender by viewModel.pendingDeleteSender.collectAsState()
                     val settings by viewModel.settings.collectAsState()
                     val analysis by viewModel.analysisProgress.collectAsState()
+                    val modelState by viewModel.modelState.collectAsState()
                     val hasAnalysisResults by viewModel.hasAnalysisResults.collectAsState()
                     val progressReset by viewModel.progressReset.collectAsState()
+                    val feedbackReset by viewModel.feedbackReset.collectAsState()
+                    val feedbackCount by viewModel.feedbackCount.collectAsState()
                     val isLoading by viewModel.isLoading.collectAsState()
                     BackHandler(enabled = showTrash || showSettings) {
                         showTrash = false
@@ -151,16 +164,17 @@ class MainActivity : ComponentActivity() {
                             hasAnalysisResults = hasAnalysisResults,
                             openAtAnalysis = openSettingsAtAnalysis,
                             progressReset = progressReset,
+                            feedbackCount = feedbackCount,
+                            feedbackReset = feedbackReset,
+                            onPersonalization = viewModel::setPersonalization,
+                            onForgetFeedback = viewModel::forgetFeedback,
                             isLoading = isLoading,
                             onSortOrder = viewModel::setSortOrder,
                             onPriority = viewModel::setPriority,
-                            onStartAnalysis = {
-                                if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
-                                        this@MainActivity, Manifest.permission.POST_NOTIFICATIONS
-                                    ) != PackageManager.PERMISSION_GRANTED) {
-                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                } else viewModel.startAnalysis()
-                            },
+                            modelState = modelState,
+                            onCheckModelUpdate = viewModel::checkModelUpdate,
+                            onUpdateModel = { startAnalysis(true) },
+                            onStartAnalysis = { startAnalysis(false) },
                             onPauseAnalysis = viewModel::pauseAnalysis,
                             onResetProgress = viewModel::resetProgress,
                             onBack = {

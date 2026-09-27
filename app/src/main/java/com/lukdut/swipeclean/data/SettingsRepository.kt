@@ -16,12 +16,15 @@ class SettingsRepository(private val preferences: SharedPreferences) {
             } ?: Priority.NORMAL
             settings = settings.withPriority(signal, priority)
         }
-        return settings
+        return settings.copy(personalization = Priority.entries.firstOrNull {
+            it.name == preferences.getString("personalization", null)
+        } ?: Priority.NORMAL)
     }
 
     fun save(settings: PhotoSettings) {
         preferences.edit {
             putString("sort_order", settings.sortOrder.name)
+            putString("personalization", settings.personalization.name)
             QualitySignal.entries.forEach { putString(it.name, settings.priority(it).name) }
         }
     }

@@ -1,0 +1,18 @@
+SigLIP 2 Base image encoder
+Original model: Google, https://huggingface.co/google/siglip2-base-patch16-224
+License: Apache License 2.0 (see LICENSE-SigLIP2.txt).
+
+This distribution uses the quantized ONNX vision-only derivative exported by
+ONNX Community. No text encoder is included.
+https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX
+Revision: ba1f3b0843f24bc5417d38e19c37b287d719b2f4
+Source file: onnx/vision_model_quantized.onnx
+Downloaded model (not bundled in the app): siglip2-base-patch16-224-int8.onnx
+SHA-256: 5f2b401c1a4fc095702a5d45348e17ad46c4f87064085365b43c6e8eaa5c0070
+
+The ONNX graph is distributed unchanged. SwipeClean applies RGB bilinear resizing,
+white alpha compositing and [-1, 1] channel normalization, then stores a per-vector
+int8 quantization of the pooled 768-dimensional output. These vectors are used
+only to compare images; the model does not decide whether a photo is valuable.
+
+ONNX Runtime: https://github.com/microsoft/onnxruntime (MIT License).

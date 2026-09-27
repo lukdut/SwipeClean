@@ -23,6 +23,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        val manifestUrl = providers.gradleProperty("modelManifestUrl").orElse(
+            "https://raw.githubusercontent.com/lukdut/SwipeClean/master/app/src/main/assets/models/embedding-model.json"
+        ).get()
+        require(manifestUrl.startsWith("https://") && manifestUrl.none { it == '"' || it == '\\' || it.isWhitespace() })
+        buildConfigField("String", "MODEL_MANIFEST_URL", "\"$manifestUrl\"")
     }
 
     buildTypes {
@@ -40,7 +45,14 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
+    androidResources {
+        noCompress += "onnx"
+    }
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    // Optional real-model fixture belongs only to the test APK, never to the application.
+    sourceSets.getByName("androidTest").assets.srcDir("$rootDir/build/model-fixtures")
 }
 
 kotlin {
@@ -52,6 +64,7 @@ kotlin {
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
+
 
 dependencies {
     implementation(libs.androidx.core.ktx)
@@ -67,9 +80,11 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.onnxruntime.android)
     ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

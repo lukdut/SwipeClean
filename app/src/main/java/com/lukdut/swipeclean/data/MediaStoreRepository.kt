@@ -17,7 +17,8 @@ class MediaStoreRepository(private val context: Context) {
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.DATE_ADDED,
             MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.DATE_MODIFIED
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.DATE_TAKEN
         )
 
         context.contentResolver.query(
@@ -32,6 +33,7 @@ class MediaStoreRepository(private val context: Context) {
             val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
             val modifiedCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
+            val takenCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -44,7 +46,8 @@ class MediaStoreRepository(private val context: Context) {
                         displayName = cursor.getString(nameCol) ?: "",
                         dateAdded = cursor.getLong(dateCol),
                         size = cursor.getLong(sizeCol),
-                        dateModified = cursor.getLong(modifiedCol)
+                        dateModified = cursor.getLong(modifiedCol),
+                        dateTaken = cursor.getLong(takenCol)
                     )
                 )
             }

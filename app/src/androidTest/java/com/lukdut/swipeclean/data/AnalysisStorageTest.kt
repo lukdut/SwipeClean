@@ -23,7 +23,7 @@ class AnalysisStorageTest {
         val preferences = context.getSharedPreferences("settings_test", Context.MODE_PRIVATE)
         try {
             val settings = PhotoSettings(SortOrder.ByPotentiallyUnwanted, Priority.HIGH,
-                Priority.OFF, Priority.NORMAL, Priority.HIGH)
+                Priority.OFF, Priority.NORMAL, Priority.HIGH, personalization = Priority.HIGH)
             SettingsRepository(preferences).save(settings)
             assertEquals(settings, SettingsRepository(preferences).load())
         } finally {

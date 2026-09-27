@@ -13,6 +13,15 @@ class PhotoQueueTest {
     private val quality = mapOf(6L to PhotoQuality(0f, 1f, 0f, 0f), 5L to PhotoQuality(0.7f, 0f, 0f, 0f))
 
     @Test
+    fun personalPreferencesReorderPendingPhotosAndProtectVisibleCards() {
+        val reordered = PhotoQueue(photos).reorder(smart, emptyMap(), preserveVisible = true,
+            personalScores = mapOf(6L to 0.8f, 3L to -0.5f))
+        assertEquals(listOf(1L, 2L, 6L, 4L, 5L, 3L), reordered.photos.map { it.id })
+        assertEquals(photos, PhotoQueue(photos).reorder(smart.copy(personalization = Priority.OFF),
+            emptyMap(), false, mapOf(6L to 0.8f)).photos)
+    }
+
+    @Test
     fun analysisKeepsReviewedAndVisibleCardsInPlace() {
         val reordered = PhotoQueue(photos, index = 1).reorder(smart, quality, preserveVisible = true)
         assertEquals(listOf(1L, 2L, 3L, 6L, 5L, 4L), reordered.photos.map { it.id })

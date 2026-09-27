@@ -16,9 +16,11 @@ data class PhotoSettings(
     val blur: Priority = Priority.NORMAL,
     val dark: Priority = Priority.NORMAL,
     val bright: Priority = Priority.NORMAL,
-    val lowDetail: Priority = Priority.NORMAL
+    val lowDetail: Priority = Priority.NORMAL,
+    val personalization: Priority = Priority.NORMAL
 ) {
-    val hasEnabledSignals: Boolean get() = QualitySignal.entries.any { priority(it) != Priority.OFF }
+    val hasEnabledSignals: Boolean get() = personalization != Priority.OFF ||
+        QualitySignal.entries.any { priority(it) != Priority.OFF }
 
     fun priority(signal: QualitySignal): Priority = when (signal) {
         QualitySignal.BLUR -> blur

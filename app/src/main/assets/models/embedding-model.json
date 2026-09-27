@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "minAppVersion": 1,
+  "version": "siglip2-b16-224-int8-v1",
+  "displayName": "SigLIP 2 Base",
+  "url": "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/ba1f3b0843f24bc5417d38e19c37b287d719b2f4/onnx/vision_model_quantized.onnx",
+  "sha256": "5f2b401c1a4fc095702a5d45348e17ad46c4f87064085365b43c6e8eaa5c0070",
+  "sizeBytes": 94553333,
+  "preprocessing": "rgb-bilinear-nchw-v1",
+  "inputName": "pixel_values",
+  "outputName": "pooler_output",
+  "inputSize": 224,
+  "dimensions": 768,
+  "mean": [0.5, 0.5, 0.5],
+  "std": [0.5, 0.5, 0.5]
+}

@@ -19,9 +19,12 @@ import com.lukdut.swipeclean.MainActivity
 import com.lukdut.swipeclean.R
 import com.lukdut.swipeclean.data.MediaStoreRepository
 import com.lukdut.swipeclean.data.PhotoAnalyzer
+import com.lukdut.swipeclean.data.PhotoFeedbackRepository
 import com.lukdut.swipeclean.data.db.AppDatabase
 import com.lukdut.swipeclean.data.db.PhotoAnalysisEntity
-import com.lukdut.swipeclean.data.db.PhotoReviewStatus
+import com.lukdut.swipeclean.data.model.EmbeddingModelRepository
+import com.lukdut.swipeclean.data.model.ModelDownloadStage
+import com.lukdut.swipeclean.data.model.ModelInstallException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -35,6 +38,9 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 
 /** Started only by a visible user action; never restarted automatically by Android. */
 class PhotoAnalysisService : Service() {
@@ -66,15 +72,7 @@ class PhotoAnalysisService : Service() {
         if (analysisJob != null) return START_NOT_STICKY
         val request = intent.getLongExtra(EXTRA_REQUEST, -1)
         try {
-            val type = when {
-                Build.VERSION.SDK_INT >= 35 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
-                Build.VERSION.SDK_INT >= 29 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                else -> 0
-            }
-            val notification = notification(AnalysisCoordinator.progress.value ?: AnalysisProgress(preparing = true))
-            // Use the platform API: older ServiceCompat implementations mask out mediaProcessing.
-            if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, type)
-            else startForeground(NOTIFICATION_ID, notification)
+            promoteForeground(downloading = true)
         } catch (e: RuntimeException) {
             Log.e(TAG, "Cannot promote photo analysis service", e)
             AnalysisCoordinator.finish(request, "Не удалось запустить фоновый анализ. Попробуйте ещё раз.")
@@ -87,7 +85,8 @@ class PhotoAnalysisService : Service() {
             return START_NOT_STICKY
         }
 
-        val job = scope.launch(start = CoroutineStart.LAZY) { analyze(request) }
+        val updateModel = intent.getBooleanExtra(EXTRA_UPDATE_MODEL, false)
+        val job = scope.launch(start = CoroutineStart.LAZY) { analyze(request, updateModel) }
         analysisJob = job
         AnalysisCoordinator.attach(request, job)
         job.start()
@@ -95,7 +94,7 @@ class PhotoAnalysisService : Service() {
     }
 
     @OptIn(FlowPreview::class)
-    private suspend fun analyze(request: Long) {
+    private suspend fun analyze(request: Long, updateModel: Boolean) {
         val updates = scope.launch {
             AnalysisCoordinator.progress.filterNotNull().sample(500).collect { progress ->
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
@@ -121,28 +120,35 @@ class PhotoAnalysisService : Service() {
                 }
             }
 
+            val model = EmbeddingModelRepository.getInstance(this).prepareForAnalysis(update = updateModel) { progress ->
+                withContext(Dispatchers.Main.immediate) { AnalysisCoordinator.downloading(request, progress) }
+            }
+            currentCoroutineContext().ensureActive()
+            if (AnalysisCoordinator.shouldStop(request)) return
+            promoteForeground(downloading = false)
             val database = AppDatabase.getInstance(this)
             val dao = database.photoAnalysisDao()
-            val reviews = database.photoReviewDao()
-            val reviewed = (reviews.getIdsByStatus(PhotoReviewStatus.KEPT) +
-                reviews.getIdsByStatus(PhotoReviewStatus.TRASH)).toHashSet()
-            val candidates = MediaStoreRepository(this).loadAllPhotos().filter { it.id !in reviewed }
+            val feedback = PhotoFeedbackRepository(database)
+            // Reviewed photos also need vectors to learn from earlier explicit decisions.
+            val candidates = MediaStoreRepository(this).loadAllPhotos()
             val cached = dao.getAll().associateBy { it.mediaStoreId }
-            val missing = candidates.filter { cached[it.id]?.matches(it) != true }
-            AnalysisCoordinator.prepared(request, candidates.size, candidates.size - missing.size)
-            val analyzer = PhotoAnalyzer(contentResolver)
-            BatchedAnalysisRunner().run(
+            val missing = candidates.filter { cached[it.id]?.isComplete(it, model.spec) != true }
+            AnalysisCoordinator.prepared(request, candidates.size, candidates.size - missing.size, model.spec.embeddingVersion)
+            PhotoAnalyzer(this, model).use { analyzer -> BatchedAnalysisRunner(parallelism = 1).run(
                 items = missing,
                 shouldStop = { AnalysisCoordinator.shouldStop(request) },
                 analyze = { photo -> analyzer.analyze(photo)?.let { PhotoAnalysisEntity.from(photo, it) } },
                 save = { batch ->
-                    dao.upsertAll(batch)
+                    feedback.saveAnalysis(batch)
                     AnalysisCoordinator.saved(request, batch.size)
                 },
                 onSkipped = { AnalysisCoordinator.skipped(request) }
-            )
+            ) }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: ModelInstallException) {
+            Log.w(TAG, "Model preparation failed", e)
+            error = e.message
         } catch (e: Exception) {
             Log.e(TAG, "Photo analysis failed", e)
             error = "Не удалось завершить анализ. Можно продолжить с сохранённых результатов."
@@ -157,6 +163,18 @@ class PhotoAnalysisService : Service() {
         }
     }
 
+    private fun promoteForeground(downloading: Boolean) {
+        val type = when {
+            downloading && Build.VERSION.SDK_INT >= 29 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            Build.VERSION.SDK_INT >= 35 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+            Build.VERSION.SDK_INT >= 29 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            else -> 0
+        }
+        val notification = notification(AnalysisCoordinator.progress.value ?: AnalysisProgress(preparing = true))
+        if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, type)
+        else startForeground(NOTIFICATION_ID, notification)
+    }
+
     private fun notification(progress: AnalysisProgress): Notification {
         val open = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java)
@@ -167,7 +185,8 @@ class PhotoAnalysisService : Service() {
             Intent(this, PhotoAnalysisService::class.java).setAction(ACTION_PAUSE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val message = when {
-            progress.stopping -> "Сохраняем результаты…"
+            progress.stopping -> if (progress.preparing) "Останавливаем загрузку…" else "Сохраняем результаты…"
+            progress.modelDownload != null -> progress.modelDownload.label
             progress.preparing -> "Подготавливаем фотографии…"
             progress.skipped > 0 -> "${progress.analyzed} из ${progress.total} · пропущено ${progress.skipped}"
             else -> "${progress.analyzed} из ${progress.total}"
@@ -183,7 +202,12 @@ class PhotoAnalysisService : Service() {
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setProgress(progress.total, progress.analyzed + progress.skipped, progress.preparing)
+            .apply {
+                val download = progress.modelDownload
+                if (download != null) setProgress(100, (download.fraction * 100).toInt(),
+                    download.stage != ModelDownloadStage.DOWNLOADING)
+                else setProgress(progress.total, progress.analyzed + progress.skipped, progress.preparing)
+            }
             .apply { if (!progress.stopping) addAction(0, "Пауза", pause) }
             .build()
     }
@@ -211,6 +235,7 @@ class PhotoAnalysisService : Service() {
         internal const val ACTION_START = "com.lukdut.swipeclean.analysis.START"
         internal const val ACTION_PAUSE = "com.lukdut.swipeclean.analysis.PAUSE"
         internal const val EXTRA_REQUEST = "analysis_request"
+        internal const val EXTRA_UPDATE_MODEL = "update_model"
         internal const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "photo_analysis"
         private const val TAG = "PhotoAnalysisService"

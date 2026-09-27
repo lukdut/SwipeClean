@@ -14,3 +14,7 @@
 .cxx
 local.properties
 /.idea/
+
+# Models are downloaded on the device; local inference fixtures live under build/.
+*.onnx
+*.download

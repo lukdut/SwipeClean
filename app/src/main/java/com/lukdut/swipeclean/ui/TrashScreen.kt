@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -25,7 +26,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,6 +36,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -60,6 +63,7 @@ fun TrashScreen(
     onBack: () -> Unit
 ) {
     val markedPhotos by viewModel.markedPhotos.collectAsState()
+    val preparation by viewModel.deletePreparation.collectAsState()
     val contentResolver = LocalContext.current.contentResolver
     var viewerPhoto by remember { mutableStateOf<com.lukdut.swipeclean.data.MediaPhoto?>(null) }
 
@@ -91,41 +95,55 @@ fun TrashScreen(
         },
         bottomBar = {
             if (markedPhotos.isNotEmpty()) {
-                BottomAppBar(
-                    containerColor = MaterialTheme.colorScheme.surface
+                Surface(
+                    color = MaterialTheme.colorScheme.surface
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { viewModel.restoreAll() },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("Восстановить все")
+                    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 8.dp)) {
+                        if (preparation.running) {
+                            Text("Подготавливаем удаление: ${preparation.completed} из ${preparation.total}",
+                                modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodyMedium)
+                            LinearProgressIndicator(progress = {
+                                preparation.completed.toFloat() / preparation.total.coerceAtLeast(1)
+                            }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+                            TextButton(onClick = viewModel::cancelDeletePreparation) { Text("Отменить подготовку") }
                         }
-                        Button(
-                            onClick = { viewModel.requestDelete(contentResolver) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error
-                            ),
-                            modifier = Modifier.weight(1f)
+                        preparation.error?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 16.dp)) }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Icon(
-                                Icons.Default.DeleteForever,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("Удалить все")
+                            OutlinedButton(
+                                onClick = { viewModel.restoreAll() },
+                                enabled = !preparation.running,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Восстановить все")
+                            }
+                            Button(
+                                onClick = { viewModel.requestDelete(contentResolver) },
+                                enabled = !preparation.running,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    Icons.Default.DeleteForever,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Удалить все")
+                            }
                         }
                     }
                 }
@@ -147,6 +165,7 @@ fun TrashScreen(
                 items(markedPhotos, key = { it.id }) { photo ->
                     TrashPhotoItem(
                         photo = photo,
+                        canRestore = !preparation.running,
                         onRestore = { viewModel.restorePhoto(photo.id) },
                         onOpen = { viewerPhoto = photo }
                     )
@@ -190,7 +209,8 @@ private fun EmptyTrash(modifier: Modifier = Modifier) {
 private fun TrashPhotoItem(
     photo: MediaPhoto,
     onRestore: () -> Unit,
-    onOpen: () -> Unit
+    onOpen: () -> Unit,
+    canRestore: Boolean = true
 ) {
     Box {
         AsyncImage(
@@ -223,6 +243,7 @@ private fun TrashPhotoItem(
         ) {
             IconButton(
                 onClick = onRestore,
+                enabled = canRestore,
                 modifier = Modifier.fillMaxSize()
             ) {
                 Icon(

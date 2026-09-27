@@ -41,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -56,6 +57,8 @@ import com.lukdut.swipeclean.data.PhotoSettings
 import com.lukdut.swipeclean.data.Priority
 import com.lukdut.swipeclean.data.QualitySignal
 import com.lukdut.swipeclean.data.SortOrder
+import com.lukdut.swipeclean.data.model.ModelState
+import com.lukdut.swipeclean.data.model.ModelDownloadStage
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -72,16 +75,26 @@ fun SettingsScreen(
     onPauseAnalysis: () -> Unit,
     onResetProgress: () -> Unit,
     onBack: () -> Unit,
-    openAtAnalysis: Boolean = false
+    openAtAnalysis: Boolean = false,
+    feedbackCount: Int = 0,
+    feedbackReset: ProgressResetState = ProgressResetState(),
+    onPersonalization: (Priority) -> Unit = {},
+    onForgetFeedback: () -> Unit = {},
+    modelState: ModelState = ModelState(),
+    onCheckModelUpdate: () -> Unit = {},
+    onUpdateModel: () -> Unit = {}
 ) {
     var showResetConfirmation by rememberSaveable { mutableStateOf(false) }
+    var showForgetConfirmation by rememberSaveable { mutableStateOf(false) }
     val analysisButtonRequester = remember { BringIntoViewRequester() }
     val coroutineScope = rememberCoroutineScope()
     var analysisButtonPlaced by remember { mutableStateOf(false) }
     var initialScrollHandled by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(openAtAnalysis, analysisButtonPlaced) {
-        if (openAtAnalysis && analysisButtonPlaced && !initialScrollHandled) {
+    LaunchedEffect(openAtAnalysis, analysisButtonPlaced, modelState.initializing) {
+        if (openAtAnalysis && analysisButtonPlaced && !modelState.initializing && !initialScrollHandled) {
+            // Restoring a model changes the card height; scroll after that layout is measured.
+            withFrameNanos { }
             analysisButtonRequester.bringIntoView()
             initialScrollHandled = true
         }
@@ -92,7 +105,7 @@ fun SettingsScreen(
             onDismissRequest = { showResetConfirmation = false },
             title = { Text("Сбросить прогресс просмотра?") },
             text = {
-                Text("Все решения «оставить» и «удалить» будут сброшены, а корзина приложения очистится. Фотографии снова появятся в очереди. Настройки и результаты анализа сохранятся.")
+                Text("Прогресс просмотра будет сброшен, а корзина приложения очистится. Фотографии снова появятся в очереди. Настройки, результаты анализа и история рекомендаций по оставленным и удалённым фото сохранятся.")
             },
             confirmButton = {
                 TextButton(
@@ -106,6 +119,20 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showResetConfirmation = false }) { Text("Отмена") }
             }
+        )
+    }
+
+    if (showForgetConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showForgetConfirmation = false },
+            title = { Text("Очистить историю рекомендаций?") },
+            text = { Text("Приложение начнёт учиться на новых решениях. Фотографии, корзина и прогресс просмотра сохранятся.") },
+            confirmButton = {
+                TextButton(onClick = { showForgetConfirmation = false; onForgetFeedback() }) {
+                    Text("Очистить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showForgetConfirmation = false }) { Text("Отмена") } }
         )
     }
 
@@ -166,10 +193,43 @@ fun SettingsScreen(
 
             AnalysisCard(
                 analysis, isLoading, onStartAnalysis, onPauseAnalysis,
+                modelState = modelState, onCheckModelUpdate = onCheckModelUpdate, onUpdateModel = onUpdateModel,
                 actionModifier = Modifier
                     .bringIntoViewRequester(analysisButtonRequester)
                     .onGloballyPositioned { analysisButtonPlaced = true }
             )
+
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionTitle("Ваши решения")
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Похожие фотографии", style = MaterialTheme.typography.titleMedium)
+                        Text("В режиме «Неудачные» поднимаем фото, похожие на те, которые вы удаляете, и снижаем приоритет похожих на оставленные. Выключение убирает влияние истории на порядок фото.",
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Priority.entries.forEach { priority ->
+                                FilterChip(selected = settings.personalization == priority,
+                                    onClick = { onPersonalization(priority) },
+                                    label = { Text(priority.label, Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                    modifier = Modifier.weight(1f).semantics {
+                                        contentDescription = "Похожие фотографии: ${priority.label}"
+                                    })
+                            }
+                        }
+                    }
+                }
+                Text(
+                    if (feedbackCount < 3) "Пока мало примеров для рекомендаций. Выполните анализ и продолжайте сортировку."
+                    else "Сохранено примеров: $feedbackCount. Учитываются только достаточно похожие снимки.",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(onClick = { showForgetConfirmation = true },
+                    enabled = !isLoading && !feedbackReset.running, modifier = Modifier.fillMaxWidth()) {
+                    Text("Очистить историю рекомендаций")
+                }
+                if (feedbackReset.completed) Text("История рекомендаций очищена.", style = MaterialTheme.typography.bodyMedium)
+                feedbackReset.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
 
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 SectionTitle("Приоритет признаков")
@@ -259,6 +319,9 @@ private fun AnalysisCard(
     isLoading: Boolean,
     onStart: () -> Unit,
     onPause: () -> Unit,
+    modelState: ModelState,
+    onCheckModelUpdate: () -> Unit,
+    onUpdateModel: () -> Unit,
     modifier: Modifier = Modifier,
     actionModifier: Modifier = Modifier
 ) {
@@ -266,24 +329,38 @@ private fun AnalysisCard(
         containerColor = MaterialTheme.colorScheme.secondaryContainer
     )) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Анализ качества", style = MaterialTheme.typography.titleMedium)
+            Text("Анализ фотографий", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Запускается только вручную и может расходовать заряд. Продолжается при сворачивании приложения и выключенном экране. Приостановить можно здесь или в уведомлении. Результаты сохраняются на устройстве.",
+                "Анализ содержимого и качества выполняется на устройстве и может расходовать заряд. Продолжается при сворачивании приложения и выключенном экране. Приостановить можно здесь или в уведомлении. Просмотренные фото тоже анализируются для рекомендаций.",
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
                 when {
-                    analysis.stopping -> "Сохраняем результаты…"
+                    modelState.initializing -> "Проверяем модель на устройстве…"
+                    modelState.installed == null -> "Для первого анализа нужно скачать модель — около ${modelSizeMiB(modelState.downloadSizeBytes)} МиБ. Затем она работает без интернета. Фотографии остаются на устройстве."
+                    else -> "Модель ${modelState.installed.spec.displayName} установлена. Анализ доступен без интернета."
+                },
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                when {
+                    analysis.stopping -> if (analysis.preparing) "Останавливаем загрузку…" else "Сохраняем результаты…"
+                    analysis.modelDownload != null -> analysis.modelDownload.label
                     analysis.preparing -> "Подготавливаем фотографии…"
                     isLoading -> "Загружаем список фотографий…"
                     analysis.total == 0 -> "Нет фотографий для анализа"
-                    analysis.analyzed == analysis.total -> "Все фото в очереди проанализированы"
+                    analysis.analyzed == analysis.total -> "Все доступные фото проанализированы"
                     analysis.running -> "Анализируем: ${analysis.analyzed} из ${analysis.total}"
                     else -> "Проанализировано: ${analysis.analyzed} из ${analysis.total}"
                 },
                 style = MaterialTheme.typography.labelLarge
             )
-            if (analysis.total > 0) {
+            val download = analysis.modelDownload
+            if (download != null) {
+                if (download.stage == ModelDownloadStage.DOWNLOADING) {
+                    LinearProgressIndicator(progress = { download.fraction }, modifier = Modifier.fillMaxWidth())
+                } else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else if (analysis.total > 0) {
                 LinearProgressIndicator(
                     progress = { (analysis.analyzed + analysis.skipped).toFloat() / analysis.total },
                     trackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.12f),
@@ -313,10 +390,13 @@ private fun AnalysisCard(
                 } else {
                     Button(
                         onClick = onStart,
-                        enabled = !isLoading && analysis.total > analysis.analyzed,
+                        enabled = !isLoading && !modelState.initializing && !modelState.checking &&
+                            analysis.total > analysis.analyzed,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(when {
+                            modelState.installed == null && analysis.error != null -> "Повторить загрузку модели"
+                            modelState.installed == null -> "Скачать модель и анализировать"
                             analysis.skipped > 0 && analysis.remaining == 0 -> "Повторить для пропущенных"
                             analysis.analyzed > 0 && analysis.remaining > 0 -> "Продолжить анализ"
                             else -> "Анализировать фото"
@@ -324,6 +404,23 @@ private fun AnalysisCard(
                     }
                 }
             }
+            if (modelState.available != null && modelState.installed != null) {
+                Text("Доступна новая модель — около ${modelSizeMiB(modelState.available.sizeBytes)} МиБ. После обновления фотографии будут проанализированы заново.",
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = onUpdateModel,
+                    enabled = !isLoading && !analysis.running && !modelState.checking,
+                    modifier = Modifier.fillMaxWidth()) { Text("Обновить и повторить анализ") }
+            }
+            TextButton(onClick = onCheckModelUpdate,
+                enabled = !modelState.initializing && !modelState.checking && !analysis.running,
+                modifier = Modifier.fillMaxWidth()) {
+                Text(if (modelState.checking) "Проверяем обновления…" else "Проверить обновление модели")
+            }
+            modelState.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            modelState.error?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
+
+private fun modelSizeMiB(bytes: Long): Long = (bytes + 524_288) / 1_048_576

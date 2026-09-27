@@ -7,11 +7,12 @@ data class PhotoQueue(val photos: List<MediaPhoto> = emptyList(), val index: Int
     fun reorder(
         settings: PhotoSettings,
         quality: Map<Long, PhotoQuality>,
-        preserveVisible: Boolean
+        preserveVisible: Boolean,
+        personalScores: Map<Long, Float> = emptyMap()
     ): PhotoQueue {
         val fixedCount = (index + if (preserveVisible) 2 else 0).coerceAtMost(photos.size)
         val scores = if (settings.sortOrder == SortOrder.ByPotentiallyUnwanted) {
-            quality.mapValues { it.value.score(settings) }
+            photos.associate { it.id to UnwantedPhotoScorer.score(quality[it.id], personalScores[it.id] ?: 0f, settings).value }
         } else emptyMap()
         val comparator = when (settings.sortOrder) {
             SortOrder.ByDateDesc -> compareByDescending<MediaPhoto> { it.dateAdded }

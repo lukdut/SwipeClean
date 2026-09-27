@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PhotoAnalysisDao {
+    @Query("SELECT * FROM photo_analysis WHERE mediaStoreId = :id")
+    suspend fun getById(id: Long): PhotoAnalysisEntity?
+
     @Query("SELECT * FROM photo_analysis")
     suspend fun getAll(): List<PhotoAnalysisEntity>
 

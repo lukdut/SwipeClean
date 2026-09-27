@@ -20,6 +20,7 @@ import com.lukdut.swipeclean.MainActivity
 import com.lukdut.swipeclean.analysis.AnalysisCoordinator
 import com.lukdut.swipeclean.analysis.PhotoAnalysisService
 import com.lukdut.swipeclean.data.SortOrder
+import com.lukdut.swipeclean.data.TestModelFixture
 import com.lukdut.swipeclean.data.db.AppDatabase
 import com.lukdut.swipeclean.data.db.PhotoReviewStatus
 import kotlinx.coroutines.runBlocking
@@ -39,6 +40,7 @@ class AnalysisLifecycleTest {
     fun backgroundAnalysisPausesFromNotificationAndResumesManuallyUsingSavedResults() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        runBlocking { TestModelFixture.install(context) }
         val resolver = context.contentResolver
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName,
             if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES
@@ -186,7 +188,8 @@ class AnalysisLifecycleTest {
     }
 
     private fun await(condition: () -> Boolean) {
-        val deadline = SystemClock.elapsedRealtime() + 20_000
+        // A real neural encoder now runs for each image, including on slower emulators.
+        val deadline = SystemClock.elapsedRealtime() + 120_000
         while (!condition()) {
             check(SystemClock.elapsedRealtime() < deadline) { "Timed out waiting for analysis" }
             SystemClock.sleep(25)
