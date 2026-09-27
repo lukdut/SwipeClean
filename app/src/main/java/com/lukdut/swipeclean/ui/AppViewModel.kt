@@ -53,6 +53,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 private const val PRELOAD_AHEAD = 10
+private const val MAX_UNDO_HISTORY = 10
 
 data class ProgressResetState(
     val running: Boolean = false,
@@ -69,7 +70,10 @@ data class SwipeUiState(
     val progress: Pair<Int, Int> = 0 to 0,
     val isDone: Boolean = false,
     val sortOrder: SortOrder = SortOrder.default,
-    val priorityReason: String? = null
+    val priorityReason: String? = null,
+    val canUndo: Boolean = false,
+    val undoing: Boolean = false,
+    val undoError: String? = null
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -88,6 +92,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val reviewMutex = Mutex()
     // Apply in-session decisions even if a reload overlaps a pending database write.
     private val reviewOverrides = mutableMapOf<Long, PhotoReviewEntity?>()
+    private val undoHistory = mutableListOf<MediaPhoto>()
+    private var undoing = false
+    private var undoError: String? = null
     private val analysisResults = mutableMapOf<Long, PhotoQuality>()
     private var embeddings = emptyMap<Long, Pair<String, PhotoEmbedding>>()
     private var embeddingsVersion: String? = null
@@ -185,7 +192,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadPhotos() {
-        if (_progressReset.value.running) return
+        if (_progressReset.value.running || undoing) return
         val generation = ++loadGeneration
         loadJob?.cancel()
         AnalysisCoordinator.clearFinishedProgress()
@@ -203,6 +210,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Missing media may simply be outside the user's current permission scope.
                 _allPhotos.value = photos
+                val availableKeys = photos.mapTo(hashSetOf()) { it.feedbackKey() }
+                undoHistory.removeAll { it.feedbackKey() !in availableKeys }
                 _markedAt.value = photos.mapNotNull { photo ->
                     reviews[photo.id]?.takeIf { it.status == PhotoReviewStatus.TRASH }
                         ?.let { photo.id to it.reviewedAt }
@@ -258,7 +267,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetProgress() {
-        if (_isLoading.value || _progressReset.value.running || _pendingDeleteSender.value != null ||
+        if (undoing || _isLoading.value || _progressReset.value.running || _pendingDeleteSender.value != null ||
             _deletePreparation.value.running) return
         _progressReset.value = ProgressResetState(running = true)
         _isLoading.value = true
@@ -270,6 +279,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // Wait for pending swipe writes before clearing the saved decisions.
                 reviewMutex.withLock { feedbackRepository.resetProgress() }
                 reviewOverrides.clear()
+                undoHistory.clear()
+                undoError = null
                 _markedAt.value = emptyMap()
                 _queue.value = PhotoQueue(_allPhotos.value)
                 reorderQueue(preserveVisible = false)
@@ -429,15 +440,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         } else null
         // A single emission switches the photo and its caption together, including an absent caption.
         _swipeUiState.value = SwipeUiState(queue.current, queue.next, queue.index to queue.photos.size,
-            queue.photos.isNotEmpty() && queue.index >= queue.photos.size, settings.sortOrder, reason)
+            queue.photos.isNotEmpty() && queue.index >= queue.photos.size, settings.sortOrder, reason,
+            canUndo = undoHistory.isNotEmpty() && !undoing, undoing = undoing, undoError = undoError)
     }
 
     fun markForDeletion() = reviewCurrent(PhotoReviewStatus.TRASH)
     fun keep() = reviewCurrent(PhotoReviewStatus.KEPT)
 
     private fun reviewCurrent(status: PhotoReviewStatus) {
-        if (_isLoading.value || _deletePreparation.value.running) return
+        if (undoing || _isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
         val photo = _queue.value.current ?: return
+        undoHistory.add(photo)
+        if (undoHistory.size > MAX_UNDO_HISTORY) undoHistory.removeAt(0)
+        undoError = null
         _progressReset.value = ProgressResetState()
         _feedbackReset.value = ProgressResetState()
         val reviewedAt = System.currentTimeMillis()
@@ -450,11 +465,42 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         publishSwipeState()
     }
 
+    fun undoLastReview() {
+        if (undoing || _isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
+        val photo = undoHistory.lastOrNull() ?: return
+        undoing = true
+        undoError = null
+        publishSwipeState()
+        viewModelScope.launch {
+            try {
+                // Wait for the original swipe write, then remove its decision and feedback together.
+                reviewMutex.withLock { feedbackRepository.undoReview(photo) }
+                reviewOverrides[photo.id] = null
+                undoHistory.removeAt(undoHistory.lastIndex)
+                _markedAt.update { it - photo.id }
+                _queue.update { it.returnTo(photo) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                undoError = "Не удалось отменить действие. Попробуйте ещё раз."
+            } finally {
+                undoing = false
+                publishSwipeState()
+            }
+        }
+    }
+
+    fun clearUndoError() {
+        undoError = null
+        publishSwipeState()
+    }
+
     fun restorePhoto(photoId: Long) = restore(setOf(photoId))
     fun restoreAll() = restore(_markedAt.value.keys)
 
     private fun restore(ids: Set<Long>) {
-        if (ids.isEmpty() || _isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
+        if (undoing || ids.isEmpty() || _isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
+        undoHistory.removeAll { it.id in ids }
         ids.forEach { reviewOverrides[it] = null }
         viewModelScope.launch { reviewMutex.withLock { feedbackRepository.restore(ids) } }
         _markedAt.update { it - ids }
@@ -467,7 +513,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun requestDelete(contentResolver: ContentResolver) {
-        if (_isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
+        if (undoing || _isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
         val photos = _allPhotos.value.filter { it.id in _markedAt.value }
         if (photos.isEmpty()) return
         _deletePreparation.value = DeletePreparation(running = true, total = photos.size)
@@ -544,6 +590,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun removeDeleted(deletedPhotos: List<MediaPhoto>) {
         if (deletedPhotos.isEmpty()) return
         val ids = deletedPhotos.map { it.id }.toSet()
+        undoHistory.removeAll { it.id in ids }
         pauseAnalysis()
         ids.forEach {
             reviewOverrides[it] = null

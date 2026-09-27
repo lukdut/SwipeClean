@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -42,6 +43,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -119,6 +122,13 @@ fun SwipeScreen(
     val loadError by viewModel.loadError.collectAsState()
 
     var viewerPhoto by remember { mutableStateOf<MediaPhoto?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(swipeState.undoError) {
+        swipeState.undoError?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearUndoError()
+        }
+    }
 
     DisposableEffect(viewModel) {
         viewModel.setReviewVisible(true)
@@ -145,6 +155,7 @@ fun SwipeScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 TopAppBar(
@@ -178,10 +189,14 @@ fun SwipeScreen(
                         containerColor = MaterialTheme.colorScheme.surface
                     )
                 )
-                if (sortOrder == SortOrder.ByPotentiallyUnwanted || analysis.running) {
+                if (analysis.running || (!analysis.completed && analysis.remaining > 0 &&
+                        sortOrder == SortOrder.ByPotentiallyUnwanted)) {
                     val completed = analysis.analyzed + analysis.skipped
                     val percent = if (analysis.total > 0) completed.toLong() * 100 / analysis.total else 0
-                    val status = if (!analysis.running && analysis.remaining > 0) "приостановлено" else "$percent%"
+                    val status = when {
+                        !analysis.running && analysis.remaining > 0 -> "приостановлено"
+                        else -> "$percent%"
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -199,6 +214,20 @@ fun SwipeScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                } else if (!isLoading && loadError == null && progress.second > 0) {
+                    val (reviewed, total) = progress
+                    val percent = reviewed.toLong() * 100 / total
+                    Text(
+                        text = "Просмотрено: $reviewed из $total ($percent%)",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 28.dp)
+                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
@@ -215,7 +244,8 @@ fun SwipeScreen(
                     Text(loadError!!)
                     TextButton(onClick = viewModel::loadPhotos) { Text("Повторить") }
                 }
-                isDone -> DoneContent(markedCount = markedCount, onOpenTrash = onOpenTrash)
+                isDone -> DoneContent(markedCount = markedCount, onOpenTrash = onOpenTrash,
+                    canUndo = swipeState.canUndo, undoing = swipeState.undoing, onUndo = viewModel::undoLastReview)
                 currentPhoto != null -> SwipeContent(
                     currentPhoto = currentPhoto!!,
                     nextPhoto = nextPhoto,
@@ -223,6 +253,9 @@ fun SwipeScreen(
                     onDelete = { viewModel.markForDeletion() },
                     onKeep = { viewModel.keep() },
                     onPhotoTap = { viewerPhoto = currentPhoto },
+                    canUndo = swipeState.canUndo,
+                    actionsEnabled = !swipeState.undoing,
+                    onUndo = viewModel::undoLastReview,
                     priorityReason = priorityReason,
                     showPriorityReason = sortOrder == SortOrder.ByPotentiallyUnwanted
                 )
@@ -253,7 +286,8 @@ private fun EmptyContent() {
 }
 
 @Composable
-private fun DoneContent(markedCount: Int, onOpenTrash: () -> Unit) {
+private fun DoneContent(markedCount: Int, onOpenTrash: () -> Unit,
+    canUndo: Boolean, undoing: Boolean, onUndo: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -270,6 +304,13 @@ private fun DoneContent(markedCount: Int, onOpenTrash: () -> Unit) {
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold
         )
+        if (canUndo || undoing) {
+            TextButton(onClick = onUndo, enabled = canUndo) {
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Отменить последнее действие")
+            }
+        }
         if (markedCount > 0) {
             Text(
                 "$markedCount фото помечено для удаления",
@@ -299,6 +340,9 @@ internal fun SwipeContent(
     onDelete: () -> Unit,
     onKeep: () -> Unit,
     onPhotoTap: () -> Unit,
+    canUndo: Boolean = false,
+    actionsEnabled: Boolean = true,
+    onUndo: () -> Unit = {},
     priorityReason: String? = null,
     showPriorityReason: Boolean = true
 ) {
@@ -312,7 +356,7 @@ internal fun SwipeContent(
     val visualOffset = if (isDragging) dragOffset else animatedOffset.value
 
     fun dismissPhoto(keep: Boolean) {
-        if (isDismissed) return
+        if (isDismissed || !actionsEnabled) return
         isDismissed = true
         returnAnimation?.cancel()
         dismissedPhotos += DismissedPhoto(
@@ -394,7 +438,8 @@ internal fun SwipeContent(
                     .pointerInput("tap_${currentPhoto.id}") {
                         detectTapGestures(onTap = { if (!isDismissed) onPhotoTap() })
                     }
-                    .pointerInput(currentPhoto.id, cardWidthPx) {
+                    .pointerInput(currentPhoto.id, cardWidthPx, actionsEnabled) {
+                        if (!actionsEnabled) return@pointerInput
                         detectDragGestures(
                             onDragStart = {
                                 returnAnimation?.cancel()
@@ -459,11 +504,24 @@ internal fun SwipeContent(
                 Icon(Icons.Default.Delete, contentDescription = "Удалить", modifier = Modifier.size(28.dp))
             }
 
-            Text(
-                text = "${current + 1} / $total",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "${current + 1} / $total",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                IconButton(
+                    onClick = {
+                        returnAnimation?.cancel()
+                        dismissedPhotos.clear()
+                        onUndo()
+                    },
+                    enabled = canUndo && actionsEnabled,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Отменить последнее действие")
+                }
+            }
 
             FloatingActionButton(
                 onClick = { dismissPhoto(keep = true) },

@@ -22,6 +22,9 @@ interface PhotoFeedbackDao {
     @Query("DELETE FROM photo_feedback WHERE mediaStoreId IN (:ids) AND decision = 'TRASH'")
     suspend fun undoTrash(ids: Collection<Long>)
 
+    @Query("DELETE FROM photo_feedback WHERE photoKey = :key AND decision IN ('KEPT', 'TRASH')")
+    suspend fun undoReview(key: String)
+
     @Query("DELETE FROM photo_feedback WHERE decision = 'TRASH'")
     suspend fun undoAllTrash()
 

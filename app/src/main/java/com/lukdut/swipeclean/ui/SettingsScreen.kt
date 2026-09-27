@@ -349,7 +349,8 @@ private fun AnalysisCard(
                     analysis.preparing -> "Подготавливаем фотографии…"
                     isLoading -> "Загружаем список фотографий…"
                     analysis.total == 0 -> "Нет фотографий для анализа"
-                    analysis.analyzed == analysis.total -> "Все доступные фото проанализированы"
+                    analysis.completed -> if (analysis.skipped > 0) "Анализ завершён"
+                        else "Все доступные фото проанализированы"
                     analysis.running -> "Анализируем: ${analysis.analyzed} из ${analysis.total}"
                     else -> "Проанализировано: ${analysis.analyzed} из ${analysis.total}"
                 },

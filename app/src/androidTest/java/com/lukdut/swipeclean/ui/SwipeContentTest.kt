@@ -3,10 +3,12 @@ package com.lukdut.swipeclean.ui
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -92,11 +94,31 @@ class SwipeContentTest {
         compose.runOnIdle { assertEquals(listOf(1L to true), reviewed) }
     }
 
+    @Test
+    fun undoReturnsDismissedPhotoBeforeItsAnimationFinishesAndAllowsChangingDecision() {
+        showPhotos()
+        compose.onNodeWithContentDescription("Отменить последнее действие").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Оставить").performClick()
+        nextFrame()
+        compose.onNodeWithContentDescription("Отменить последнее действие").performClick()
+        nextFrame()
+        compose.onNodeWithText("1 / 5").assertExists()
+        compose.onNodeWithContentDescription("Отменить последнее действие").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Photo 1").assertExists()
+        compose.onNodeWithContentDescription("Удалить").performClick()
+        nextFrame()
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.runOnIdle { assertEquals(listOf(1L to false), reviewed) }
+        compose.onNodeWithText("2 / 5").assertExists()
+    }
+
     private fun showPhotos(advancePhoto: Boolean = true) {
         compose.setContent {
             var index by remember { mutableIntStateOf(0) }
+            var canUndo by remember { mutableStateOf(false) }
             fun review(keep: Boolean) {
                 reviewed += photos[index].id to keep
+                canUndo = true
                 if (advancePhoto) index++
             }
 
@@ -107,7 +129,13 @@ class SwipeContentTest {
                     progress = index to photos.size,
                     onDelete = { review(false) },
                     onKeep = { review(true) },
-                    onPhotoTap = {}
+                    onPhotoTap = {},
+                    canUndo = canUndo,
+                    onUndo = {
+                        reviewed.removeAt(reviewed.lastIndex)
+                        index--
+                        canUndo = reviewed.isNotEmpty()
+                    }
                 )
             }
         }

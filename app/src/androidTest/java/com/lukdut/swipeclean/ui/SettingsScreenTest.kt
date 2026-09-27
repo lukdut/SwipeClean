@@ -115,6 +115,23 @@ class SettingsScreenTest {
     }
 
     @Test
+    fun skippedPhotosCompleteAnalysisAndCanBeRetriedExplicitly() {
+        showSettings(AnalysisProgress(total = 10, analyzed = 8, skipped = 2))
+        compose.onNodeWithText("Анализ завершён").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Не удалось прочитать: 2. Их можно проверить повторно.").assertExists()
+        compose.runOnIdle { assertEquals(0, starts) }
+        compose.onNodeWithText("Повторить для пропущенных").performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, starts) }
+    }
+
+    @Test
+    fun analysisCompletesEvenWhenEveryPhotoIsSkipped() {
+        showSettings(AnalysisProgress(total = 10, skipped = 10))
+        compose.onNodeWithText("Анализ завершён").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, starts) }
+    }
+
+    @Test
     fun resetOnlyRunsAfterConfirmation() {
         showSettings(AnalysisProgress(total = 10))
         compose.onNodeWithText("Сбросить прогресс").performScrollTo().performClick()

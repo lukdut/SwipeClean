@@ -15,4 +15,8 @@ data class AnalysisProgress(
     val modelVersion: String? = null
 ) {
     val remaining: Int get() = (total - analyzed - skipped).coerceAtLeast(0)
+
+    /** Skipped photos finish this pass too; retrying them is optional. */
+    val completed: Boolean get() = total > 0 && remaining == 0 &&
+        !running && !stopping && !preparing && error == null
 }

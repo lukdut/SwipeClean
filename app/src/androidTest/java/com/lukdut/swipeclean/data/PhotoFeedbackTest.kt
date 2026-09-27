@@ -98,4 +98,21 @@ class PhotoFeedbackTest {
         assertNull(analysis.currentEmbedding(replacement))
         assertFalse(analysis.isComplete(photo, model.copy(mean = listOf(0.4f, 0.4f, 0.4f))))
     }
+
+    @Test fun undoRemovesEitherDecisionAndLateAnalysisDoesNotBringItBack() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        try {
+            val repository = PhotoFeedbackRepository(db)
+            for (status in PhotoReviewStatus.entries) {
+                repository.review(photo, status)
+                repository.undoReview(photo)
+                repository.saveAnalysis(listOf(analysis))
+                assertTrue(db.photoReviewDao().getAll().isEmpty())
+                assertNull(db.photoFeedbackDao().getByKey(photo.feedbackKey()))
+                assertTrue(db.photoAnalysisDao().getById(photo.id)!!.isComplete(photo, model))
+            }
+            repository.review(photo, PhotoReviewStatus.TRASH)
+            assertEquals(FeedbackDecision.TRASH, db.photoFeedbackDao().getByKey(photo.feedbackKey())!!.decision)
+        } finally { db.close() }
+    }
 }

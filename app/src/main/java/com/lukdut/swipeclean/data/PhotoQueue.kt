@@ -24,6 +24,12 @@ data class PhotoQueue(val photos: List<MediaPhoto> = emptyList(), val index: Int
 
     fun advance(): PhotoQueue = copy(index = (index + 1).coerceAtMost(photos.size))
 
+    fun returnTo(photo: MediaPhoto): PhotoQueue {
+        val remaining = without(setOf(photo.id))
+        return remaining.copy(photos = remaining.photos.take(remaining.index) + photo +
+            remaining.photos.drop(remaining.index))
+    }
+
     fun without(ids: Set<Long>): PhotoQueue = PhotoQueue(
         photos = photos.filter { it.id !in ids },
         index = photos.take(index).count { it.id !in ids }

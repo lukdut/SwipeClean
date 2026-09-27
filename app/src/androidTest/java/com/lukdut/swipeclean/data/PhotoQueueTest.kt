@@ -64,4 +64,26 @@ class PhotoQueueTest {
         assertEquals(4L, queue.current?.id)
         assertEquals(listOf(2L, 4L, 5L, 6L, 1L, 3L), queue.photos.map { it.id })
     }
+
+    @Test
+    fun undoReturnsThePhotoBeforeTheCurrentCardAfterSorting() {
+        val queue = PhotoQueue(photos, index = 2).reorder(smart, quality, preserveVisible = false)
+        val undone = queue.returnTo(photos[1])
+        assertEquals(photos[1], undone.current)
+        assertEquals(queue.current, undone.next)
+        assertEquals(1, undone.index)
+        assertEquals(photos.size, undone.photos.size)
+        assertEquals(undone.photos.size, undone.photos.map { it.id }.distinct().size)
+    }
+
+    @Test
+    fun undoWorksAfterTheLastPhotoAndAfterReloadingTheQueue() {
+        val completed = PhotoQueue(photos, index = photos.size).returnTo(photos.last())
+        assertEquals(photos.last(), completed.current)
+        assertEquals(photos.size - 1, completed.index)
+        val reloaded = PhotoQueue(photos.drop(2)).returnTo(photos[1])
+        assertEquals(photos[1], reloaded.current)
+        assertEquals(photos[2], reloaded.next)
+        assertEquals(0, reloaded.index)
+    }
 }

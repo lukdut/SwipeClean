@@ -27,6 +27,11 @@ class PhotoFeedbackRepository(private val db: AppDatabase) {
         feedback.undoTrash(ids)
     }
 
+    suspend fun undoReview(photo: MediaPhoto) = db.withTransaction {
+        db.photoReviewDao().deleteById(photo.id)
+        feedback.undoReview(photo.feedbackKey())
+    }
+
     suspend fun resetProgress() = db.withTransaction {
         db.photoReviewDao().deleteAll()
         feedback.undoAllTrash()
