@@ -31,6 +31,7 @@ import com.lukdut.swipeclean.data.ageDays
 import com.lukdut.swipeclean.data.feedbackKey
 import com.lukdut.swipeclean.data.db.AppDatabase
 import com.lukdut.swipeclean.data.db.PhotoAnalysisEntity
+import com.lukdut.swipeclean.data.db.PhotoReviewEntity
 import com.lukdut.swipeclean.data.db.PhotoReviewStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -86,7 +87,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     )
     private val reviewMutex = Mutex()
     // Apply in-session decisions even if a reload overlaps a pending database write.
-    private val reviewOverrides = mutableMapOf<Long, PhotoReviewStatus?>()
+    private val reviewOverrides = mutableMapOf<Long, PhotoReviewEntity?>()
     private val analysisResults = mutableMapOf<Long, PhotoQuality>()
     private var embeddings = emptyMap<Long, Pair<String, PhotoEmbedding>>()
     private var embeddingsVersion: String? = null
@@ -105,7 +106,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _settings = MutableStateFlow(settingsRepository.load())
     private val _allPhotos = MutableStateFlow<List<MediaPhoto>>(emptyList())
     private val _queue = MutableStateFlow(PhotoQueue())
-    private val _markedIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val _markedAt = MutableStateFlow<Map<Long, Long>>(emptyMap())
     private val _isLoading = MutableStateFlow(false)
     private val _loadError = MutableStateFlow<String?>(null)
     private val _pendingDeleteSender = MutableStateFlow<IntentSender?>(null)
@@ -130,7 +131,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
     val loadError: StateFlow<String?> = _loadError.asStateFlow()
     val pendingDeleteSender: StateFlow<IntentSender?> = _pendingDeleteSender.asStateFlow()
-    val markedCount = _markedIds.map { it.size }
+    val markedCount = _markedAt.map { it.size }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
     val currentPhoto = _queue.map { it.current }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -139,8 +140,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val photosToPreload = _queue.map { queue ->
         (1..PRELOAD_AHEAD).mapNotNull { queue.photos.getOrNull(queue.index + it) }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-    val markedPhotos = combine(_allPhotos, _markedIds) { photos, ids ->
-        photos.filter { it.id in ids }
+    val markedPhotos = combine(_allPhotos, _markedAt) { photos, markedAt ->
+        photos.filter { it.id in markedAt }
+            .sortedWith(compareByDescending<MediaPhoto> { markedAt.getValue(it.id) }.thenByDescending { it.id })
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val swipeProgress = _queue.map { it.index to it.photos.size }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0 to 0)
@@ -193,20 +195,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val photos = repository.loadAllPhotos()
                 val reviews = reviewMutex.withLock {
-                    val kept = dao.getIdsByStatus(PhotoReviewStatus.KEPT)
-                    val trash = dao.getIdsByStatus(PhotoReviewStatus.TRASH)
-                    (kept.associateWith { PhotoReviewStatus.KEPT } +
-                        trash.associateWith { PhotoReviewStatus.TRASH }).toMutableMap()
+                    dao.getAll().associateBy { it.mediaStoreId }.toMutableMap()
                 }
                 val cached = analysisDao.getAll()
-                reviewOverrides.forEach { (id, status) ->
-                    if (status == null) reviews.remove(id) else reviews[id] = status
+                reviewOverrides.forEach { (id, review) ->
+                    if (review == null) reviews.remove(id) else reviews[id] = review
                 }
                 // Missing media may simply be outside the user's current permission scope.
                 _allPhotos.value = photos
-                _markedIds.value = photos.mapNotNull { photo ->
-                    photo.id.takeIf { reviews[it] == PhotoReviewStatus.TRASH }
-                }.toSet()
+                _markedAt.value = photos.mapNotNull { photo ->
+                    reviews[photo.id]?.takeIf { it.status == PhotoReviewStatus.TRASH }
+                        ?.let { photo.id to it.reviewedAt }
+                }.toMap()
                 applyCachedAnalysis(photos, cached)
                 _queue.value = PhotoQueue(photos.filter { it.id !in reviews })
                 photosLoaded = true
@@ -270,7 +270,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // Wait for pending swipe writes before clearing the saved decisions.
                 reviewMutex.withLock { feedbackRepository.resetProgress() }
                 reviewOverrides.clear()
-                _markedIds.value = emptySet()
+                _markedAt.value = emptyMap()
                 _queue.value = PhotoQueue(_allPhotos.value)
                 reorderQueue(preserveVisible = false)
                 refreshAnalysisProgress()
@@ -440,23 +440,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val photo = _queue.value.current ?: return
         _progressReset.value = ProgressResetState()
         _feedbackReset.value = ProgressResetState()
-        reviewOverrides[photo.id] = status
+        val reviewedAt = System.currentTimeMillis()
+        reviewOverrides[photo.id] = PhotoReviewEntity(photo.id, status, reviewedAt)
         viewModelScope.launch {
-            reviewMutex.withLock { feedbackRepository.review(photo, status) }
+            reviewMutex.withLock { feedbackRepository.review(photo, status, reviewedAt) }
         }
-        if (status == PhotoReviewStatus.TRASH) _markedIds.update { it + photo.id }
+        if (status == PhotoReviewStatus.TRASH) _markedAt.update { it + (photo.id to reviewedAt) }
         _queue.update { it.advance() }
         publishSwipeState()
     }
 
     fun restorePhoto(photoId: Long) = restore(setOf(photoId))
-    fun restoreAll() = restore(_markedIds.value)
+    fun restoreAll() = restore(_markedAt.value.keys)
 
     private fun restore(ids: Set<Long>) {
         if (ids.isEmpty() || _isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
         ids.forEach { reviewOverrides[it] = null }
         viewModelScope.launch { reviewMutex.withLock { feedbackRepository.restore(ids) } }
-        _markedIds.update { it - ids }
+        _markedAt.update { it - ids }
         _queue.update { queue -> queue.restore(_allPhotos.value.filter { it.id in ids }) }
         reorderQueue(preserveVisible = true)
         if (!_analysisProgress.value.running) {
@@ -467,7 +468,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun requestDelete(contentResolver: ContentResolver) {
         if (_isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
-        val photos = _allPhotos.value.filter { it.id in _markedIds.value }
+        val photos = _allPhotos.value.filter { it.id in _markedAt.value }
         if (photos.isEmpty()) return
         _deletePreparation.value = DeletePreparation(running = true, total = photos.size)
         deletePreparationJob = viewModelScope.launch {
@@ -554,7 +555,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             AnalysisCoordinator.clearFinishedProgress()
             refreshAnalysisProgress()
         }
-        _markedIds.update { it - ids }
+        _markedAt.update { it - ids }
         _allPhotos.update { photos -> photos.filter { it.id !in ids } }
         _queue.update { it.without(ids) }
         publishSwipeState()

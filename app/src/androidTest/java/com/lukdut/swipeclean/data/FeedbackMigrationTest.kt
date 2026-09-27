@@ -13,6 +13,35 @@ import org.junit.runner.RunWith
 class FeedbackMigrationTest {
     @get:Rule val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), AppDatabase::class.java)
 
+    @Test fun upgradeRecoversReviewTimesAndPreservesPhotosWithoutFeedback() {
+        helper.createDatabase("trash-order-migration-test", 3).apply {
+            execSQL("INSERT INTO photo_review VALUES (1, 'TRASH'), (2, 'TRASH'), (3, 'KEPT')")
+            execSQL("""INSERT INTO photo_feedback VALUES
+                ('first', 1, 'TRASH', NULL, NULL, NULL, 100),
+                ('second', 1, 'TRASH', NULL, NULL, NULL, 200),
+                ('obsolete', 1, 'KEPT', NULL, NULL, NULL, 300),
+                ('kept', 3, 'KEPT', NULL, NULL, NULL, 400)""")
+            close()
+        }
+        helper.runMigrationsAndValidate("trash-order-migration-test", 4, true, AppDatabase.MIGRATION_3_4).use { db ->
+            db.query("SELECT mediaStoreId, status, reviewedAt FROM photo_review ORDER BY mediaStoreId").use {
+                assertTrue(it.moveToNext())
+                assertEquals(1L, it.getLong(0))
+                assertEquals("TRASH", it.getString(1))
+                assertEquals(200L, it.getLong(2))
+                assertTrue(it.moveToNext())
+                assertEquals(2L, it.getLong(0))
+                assertEquals("TRASH", it.getString(1))
+                assertEquals(0L, it.getLong(2))
+                assertTrue(it.moveToNext())
+                assertEquals(3L, it.getLong(0))
+                assertEquals("KEPT", it.getString(1))
+                assertEquals(400L, it.getLong(2))
+                assertFalse(it.moveToNext())
+            }
+        }
+    }
+
     @Test fun upgradePreservesQualityAndCreatesPendingFeedbackForExistingDecisions() {
         helper.createDatabase("feedback-migration-test", 2).apply {
             execSQL("INSERT INTO photo_review VALUES (1, 'KEPT')")

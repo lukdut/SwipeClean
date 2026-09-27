@@ -12,7 +12,7 @@ class PhotoFeedbackRepository(private val db: AppDatabase) {
 
     suspend fun review(photo: MediaPhoto, status: PhotoReviewStatus, now: Long = System.currentTimeMillis()) =
         db.withTransaction {
-            db.photoReviewDao().upsert(PhotoReviewEntity(photo.id, status))
+            db.photoReviewDao().upsert(PhotoReviewEntity(photo.id, status, now))
             // Preserve the actual producer version. Consumers filter by the active model.
             val cached = db.photoAnalysisDao().getById(photo.id)?.takeIf { it.matches(photo) &&
                 it.embeddingVersion != null && PhotoEmbedding.decode(it.embedding, it.embedding?.size ?: 0) != null }

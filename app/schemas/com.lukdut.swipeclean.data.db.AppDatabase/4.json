@@ -1,0 +1,190 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 4,
+    "identityHash": "3f100c6fda53c65e147de28f7883b75a",
+    "entities": [
+      {
+        "tableName": "photo_review",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`mediaStoreId` INTEGER NOT NULL, `status` TEXT NOT NULL, `reviewedAt` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`mediaStoreId`))",
+        "fields": [
+          {
+            "fieldPath": "mediaStoreId",
+            "columnName": "mediaStoreId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reviewedAt",
+            "columnName": "reviewedAt",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "mediaStoreId"
+          ]
+        }
+      },
+      {
+        "tableName": "photo_analysis",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`mediaStoreId` INTEGER NOT NULL, `uri` TEXT NOT NULL, `dateAdded` INTEGER NOT NULL, `dateModified` INTEGER NOT NULL, `size` INTEGER NOT NULL, `analyzerVersion` INTEGER NOT NULL, `embedding` BLOB DEFAULT NULL, `embeddingVersion` TEXT DEFAULT NULL, `blur` REAL NOT NULL, `dark` REAL NOT NULL, `bright` REAL NOT NULL, `lowDetail` REAL NOT NULL, PRIMARY KEY(`mediaStoreId`))",
+        "fields": [
+          {
+            "fieldPath": "mediaStoreId",
+            "columnName": "mediaStoreId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uri",
+            "columnName": "uri",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateAdded",
+            "columnName": "dateAdded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateModified",
+            "columnName": "dateModified",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "size",
+            "columnName": "size",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "analyzerVersion",
+            "columnName": "analyzerVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "embedding",
+            "columnName": "embedding",
+            "affinity": "BLOB",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "embeddingVersion",
+            "columnName": "embeddingVersion",
+            "affinity": "TEXT",
+            "defaultValue": "NULL"
+          },
+          {
+            "fieldPath": "quality.blur",
+            "columnName": "blur",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quality.dark",
+            "columnName": "dark",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quality.bright",
+            "columnName": "bright",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quality.lowDetail",
+            "columnName": "lowDetail",
+            "affinity": "REAL",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "mediaStoreId"
+          ]
+        }
+      },
+      {
+        "tableName": "photo_feedback",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`photoKey` TEXT NOT NULL, `mediaStoreId` INTEGER NOT NULL, `decision` TEXT NOT NULL, `embedding` BLOB, `embeddingVersion` TEXT, `ageDays` REAL, `decidedAt` INTEGER NOT NULL, PRIMARY KEY(`photoKey`))",
+        "fields": [
+          {
+            "fieldPath": "photoKey",
+            "columnName": "photoKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaStoreId",
+            "columnName": "mediaStoreId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "decision",
+            "columnName": "decision",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "embedding",
+            "columnName": "embedding",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "embeddingVersion",
+            "columnName": "embeddingVersion",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ageDays",
+            "columnName": "ageDays",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "decidedAt",
+            "columnName": "decidedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "photoKey"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_photo_feedback_mediaStoreId",
+            "unique": false,
+            "columnNames": [
+              "mediaStoreId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_photo_feedback_mediaStoreId` ON `${TABLE_NAME}` (`mediaStoreId`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3f100c6fda53c65e147de28f7883b75a')"
+    ]
+  }
+}

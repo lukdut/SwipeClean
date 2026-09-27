@@ -7,6 +7,9 @@ import androidx.room.Upsert
 @Dao
 interface PhotoReviewDao {
 
+    @Query("SELECT * FROM photo_review")
+    suspend fun getAll(): List<PhotoReviewEntity>
+
     @Query("SELECT mediaStoreId FROM photo_review WHERE status = :status")
     suspend fun getIdsByStatus(status: PhotoReviewStatus): List<Long>
 

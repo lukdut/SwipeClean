@@ -224,14 +224,6 @@ private fun TrashPhotoItem(
                 .clickable(onClick = onOpen)
         )
 
-        // Red tint overlay
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFFE53935).copy(alpha = 0.35f))
-        )
-
         // Restore button in top-right corner
         Box(
             modifier = Modifier

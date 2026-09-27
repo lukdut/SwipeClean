@@ -10,7 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [PhotoReviewEntity::class, PhotoAnalysisEntity::class, PhotoFeedbackEntity::class],
-    version = 3,
+    version = 4,
     autoMigrations = [AutoMigration(from = 1, to = 2)],
     exportSchema = true
 )
@@ -43,13 +43,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE photo_review ADD COLUMN reviewedAt INTEGER NOT NULL DEFAULT 0")
+                // Recover decision times where feedback history is still available.
+                db.execSQL("""UPDATE photo_review SET reviewedAt = COALESCE((
+                    SELECT MAX(decidedAt) FROM photo_feedback
+                    WHERE photo_feedback.mediaStoreId = photo_review.mediaStoreId
+                        AND photo_feedback.decision = photo_review.status
+                ), 0)""")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "swipeclean.db"
-                ).addMigrations(MIGRATION_2_3).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
             }
     }
 }
