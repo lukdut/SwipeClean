@@ -104,17 +104,18 @@ fun SwipeScreen(
     onOpenSettings: () -> Unit,
     onOpenAnalysis: () -> Unit
 ) {
-    val currentPhoto by viewModel.currentPhoto.collectAsState()
-    val nextPhoto by viewModel.nextPhoto.collectAsState()
+    val swipeState by viewModel.swipeUiState.collectAsState()
+    val currentPhoto = swipeState.currentPhoto
+    val nextPhoto = swipeState.nextPhoto
     val markedCount by viewModel.markedCount.collectAsState()
-    val progress by viewModel.swipeProgress.collectAsState()
-    val isDone by viewModel.isDone.collectAsState()
+    val progress = swipeState.progress
+    val isDone = swipeState.isDone
     val isLoading by viewModel.isLoading.collectAsState()
-    val sortOrder by viewModel.sortOrder.collectAsState()
+    val sortOrder = swipeState.sortOrder
     val photosToPreload by viewModel.photosToPreload.collectAsState()
     val analysis by viewModel.analysisProgress.collectAsState()
     val hasAnalysisResults by viewModel.hasAnalysisResults.collectAsState()
-    val priorityReason by viewModel.priorityReason.collectAsState()
+    val priorityReason = swipeState.priorityReason
     val loadError by viewModel.loadError.collectAsState()
 
     var viewerPhoto by remember { mutableStateOf<MediaPhoto?>(null) }
@@ -186,14 +187,16 @@ fun SwipeScreen(
                             .fillMaxWidth()
                             .clickable(role = Role.Button, onClickLabel = "Открыть настройки анализа",
                                 onClick = onOpenAnalysis)
-                            .heightIn(min = 48.dp)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .heightIn(min = 28.dp)
+                            .padding(horizontal = 16.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "Анализ: $completed из ${analysis.total} ($status)",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -220,7 +223,8 @@ fun SwipeScreen(
                     onDelete = { viewModel.markForDeletion() },
                     onKeep = { viewModel.keep() },
                     onPhotoTap = { viewerPhoto = currentPhoto },
-                    priorityReason = priorityReason
+                    priorityReason = priorityReason,
+                    showPriorityReason = sortOrder == SortOrder.ByPotentiallyUnwanted
                 )
                 else -> EmptyContent()
             }
@@ -295,7 +299,8 @@ internal fun SwipeContent(
     onDelete: () -> Unit,
     onKeep: () -> Unit,
     onPhotoTap: () -> Unit,
-    priorityReason: String? = null
+    priorityReason: String? = null,
+    showPriorityReason: Boolean = true
 ) {
     val coroutineScope = rememberCoroutineScope()
     val dismissedPhotos = remember { mutableStateListOf<DismissedPhoto>() }
@@ -347,12 +352,16 @@ internal fun SwipeContent(
                 .height(4.dp)
         )
 
-        priorityReason?.let {
+        // Keep the photo's bounds stable as asynchronous recommendations appear or change.
+        if (showPriorityReason) {
             Text(
-                it,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                priorityReason.orEmpty(),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                minLines = 1,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
@@ -360,7 +369,7 @@ internal fun SwipeContent(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(top = 8.dp),
+                .padding(top = 2.dp),
             contentAlignment = Alignment.Center
         ) {
             val cardWidthPx = constraints.maxWidth.toFloat()

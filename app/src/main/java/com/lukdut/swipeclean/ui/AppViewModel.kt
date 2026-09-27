@@ -62,6 +62,15 @@ data class ProgressResetState(
 data class DeletePreparation(val running: Boolean = false, val completed: Int = 0, val total: Int = 0,
     val error: String? = null)
 
+data class SwipeUiState(
+    val currentPhoto: MediaPhoto? = null,
+    val nextPhoto: MediaPhoto? = null,
+    val progress: Pair<Int, Int> = 0 to 0,
+    val isDone: Boolean = false,
+    val sortOrder: SortOrder = SortOrder.default,
+    val priorityReason: String? = null
+)
+
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val modelRepository = EmbeddingModelRepository.getInstance(application)
     val modelState = modelRepository.state
@@ -84,6 +93,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var feedbackVersion: String? = null
     private var feedbackExamples = emptyList<FeedbackExample>()
     private var personalScores = emptyMap<Long, Float>()
+    private var personalScoresVersion: String? = null
     private var rankingJob: Job? = null
     private var deletePreparationJob: Job? = null
     private var loadJob: Job? = null
@@ -101,7 +111,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingDeleteSender = MutableStateFlow<IntentSender?>(null)
     private val _analysisProgress = MutableStateFlow(AnalysisProgress())
     private val _hasAnalysisResults = MutableStateFlow(false)
-    private val _priorityReason = MutableStateFlow<String?>(null)
+    private val _swipeUiState = MutableStateFlow(SwipeUiState(sortOrder = _settings.value.sortOrder))
     private val _progressReset = MutableStateFlow(ProgressResetState())
     private val _feedbackReset = MutableStateFlow(ProgressResetState())
     private val _feedbackCount = MutableStateFlow(0)
@@ -110,7 +120,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val settings: StateFlow<PhotoSettings> = _settings.asStateFlow()
     val analysisProgress: StateFlow<AnalysisProgress> = _analysisProgress.asStateFlow()
     val hasAnalysisResults: StateFlow<Boolean> = _hasAnalysisResults.asStateFlow()
-    val priorityReason: StateFlow<String?> = _priorityReason.asStateFlow()
+    val swipeUiState: StateFlow<SwipeUiState> = _swipeUiState.asStateFlow()
     val progressReset: StateFlow<ProgressResetState> = _progressReset.asStateFlow()
     val feedbackReset: StateFlow<ProgressResetState> = _feedbackReset.asStateFlow()
     val feedbackCount: StateFlow<Int> = _feedbackCount.asStateFlow()
@@ -165,8 +175,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 feedbackVersion = model?.embeddingVersion
                 _feedbackCount.value = feedbackExamples.size
-                personalScores = emptyMap()
-                reorderQueue(preserveVisible = true)
+                // Keep the last completed ranking until its replacement is ready. Each swipe
+                // writes feedback; clearing here would blink the caption during the debounce.
                 schedulePersonalRanking()
             }
         }
@@ -394,22 +404,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (modelState.value.installed?.spec?.embeddingVersion != modelVersion) return@launch
             personalScores = scores
+            personalScoresVersion = modelVersion
             reorderQueue(preserveVisible = true)
         }
     }
 
+    private fun currentPersonalScores(): Map<Long, Float> =
+        if (personalScoresVersion == modelState.value.installed?.spec?.embeddingVersion) personalScores
+        else emptyMap()
+
     private fun reorderQueue(preserveVisible: Boolean) {
         _queue.value = _queue.value.reorder(_settings.value, analysisResults, preserveVisible && reviewVisible,
-            personalScores)
-        updatePriorityReason()
+            currentPersonalScores())
+        publishSwipeState()
     }
 
-    private fun updatePriorityReason() {
-        _priorityReason.value = if (_settings.value.sortOrder == SortOrder.ByPotentiallyUnwanted) {
-            _queue.value.current?.let {
-                UnwantedPhotoScorer.score(analysisResults[it.id], personalScores[it.id] ?: 0f, _settings.value).reason
+    private fun publishSwipeState() {
+        val queue = _queue.value
+        val settings = _settings.value
+        val reason = if (settings.sortOrder == SortOrder.ByPotentiallyUnwanted) {
+            queue.current?.let {
+                UnwantedPhotoScorer.score(analysisResults[it.id], currentPersonalScores()[it.id] ?: 0f, settings).reason
             }
         } else null
+        // A single emission switches the photo and its caption together, including an absent caption.
+        _swipeUiState.value = SwipeUiState(queue.current, queue.next, queue.index to queue.photos.size,
+            queue.photos.isNotEmpty() && queue.index >= queue.photos.size, settings.sortOrder, reason)
     }
 
     fun markForDeletion() = reviewCurrent(PhotoReviewStatus.TRASH)
@@ -426,7 +446,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (status == PhotoReviewStatus.TRASH) _markedIds.update { it + photo.id }
         _queue.update { it.advance() }
-        updatePriorityReason()
+        publishSwipeState()
     }
 
     fun restorePhoto(photoId: Long) = restore(setOf(photoId))
@@ -537,7 +557,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _markedIds.update { it - ids }
         _allPhotos.update { photos -> photos.filter { it.id !in ids } }
         _queue.update { it.without(ids) }
-        updatePriorityReason()
+        publishSwipeState()
         refreshAnalysisProgress()
     }
 
