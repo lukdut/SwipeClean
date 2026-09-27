@@ -7,12 +7,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.lukdut.swipeclean.data.MediaPhoto
@@ -31,6 +36,176 @@ class SwipeContentTest {
         MediaPhoto(id, Uri.EMPTY, "Photo $id", 0L, 0L)
     }
     private val reviewed = mutableListOf<Pair<Long, Boolean>>()
+
+    @Test
+    fun pinchZoomsAndPansWithoutReviewing() {
+        showPhotos()
+
+        pinchPhoto(startRadius = 0.1f, endRadius = 0.25f)
+        assertScale(id = 1, percent = 250)
+        swipePhoto(id = 1, keep = true)
+        swipePhoto(id = 1, keep = false)
+
+        compose.runOnIdle {
+            assertEquals(emptyList<Pair<Long, Boolean>>(), reviewed)
+        }
+        assertScale(id = 1, percent = 250)
+    }
+
+    @Test
+    fun zoomOutRestoresSwipeOnlyAfterAllFingersLift() {
+        showPhotos()
+        pinchPhoto(startRadius = 0.1f, endRadius = 0.25f)
+
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput {
+            down(0, Offset(width * 0.1f, centerY))
+            down(1, Offset(width * 0.9f, centerY))
+            updatePointerTo(0, Offset(width * 0.49f, centerY))
+            updatePointerTo(1, Offset(width * 0.51f, centerY))
+            move()
+            up(1)
+            moveTo(0, Offset(width * 0.95f, centerY))
+            up(0)
+        }
+        nextFrame()
+        assertScale(id = 1, percent = 100)
+        compose.runOnIdle { assertEquals(emptyList<Pair<Long, Boolean>>(), reviewed) }
+
+        swipePhoto(id = 1, keep = true)
+        compose.runOnIdle { assertEquals(listOf(1L to true), reviewed) }
+    }
+
+    @Test
+    fun addingSecondFingerCancelsPendingReview() {
+        showPhotos()
+
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput {
+            down(0, Offset(width * 0.1f, centerY))
+            moveTo(0, Offset(width * 0.7f, centerY))
+            down(1, Offset(width * 0.9f, centerY))
+            updatePointerTo(0, Offset(width * 0.6f, centerY))
+            updatePointerTo(1, Offset(width * 0.95f, centerY))
+            move()
+            up(1)
+            moveTo(0, Offset(width * 0.95f, centerY))
+            up(0)
+        }
+        compose.mainClock.advanceTimeBy(1_000)
+
+        assertScale(id = 1, percent = 175)
+        compose.runOnIdle {
+            assertEquals(emptyList<Pair<Long, Boolean>>(), reviewed)
+        }
+    }
+
+    @Test
+    fun twoFingerPanAtOriginalSizeDoesNotReviewPhoto() {
+        showPhotos()
+
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput {
+            pinch(
+                start0 = Offset(width * 0.1f, centerY),
+                end0 = Offset(width * 0.6f, centerY),
+                start1 = Offset(width * 0.3f, centerY),
+                end1 = Offset(width * 0.8f, centerY),
+                durationMillis = 96
+            )
+        }
+        nextFrame()
+        assertScale(id = 1, percent = 100)
+        compose.runOnIdle {
+            assertEquals(emptyList<Pair<Long, Boolean>>(), reviewed)
+        }
+        swipePhoto(id = 1, keep = false)
+        compose.runOnIdle { assertEquals(listOf(1L to false), reviewed) }
+    }
+
+    @Test
+    fun zoomIsLimitedAndResetsForNextPhotoAndUndo() {
+        showPhotos()
+        pinchPhoto(startRadius = 0.02f, endRadius = 0.4f)
+        assertScale(id = 1, percent = 500)
+
+        compose.onNodeWithContentDescription("Оставить").performClick()
+        nextFrame()
+        assertScale(id = 2, percent = 100)
+        compose.onNodeWithContentDescription("Отменить последнее действие").performClick()
+        nextFrame()
+        assertScale(id = 1, percent = 100)
+
+        swipePhoto(id = 1, keep = false)
+        compose.runOnIdle { assertEquals(listOf(1L to false), reviewed) }
+    }
+
+    @Test
+    fun onlySingleFingerTapResetsZoomAndRestoresSwipe() {
+        showPhotos()
+        pinchPhoto(startRadius = 0.1f, endRadius = 0.25f)
+        swipePhoto(id = 1, keep = true)
+        assertScale(id = 1, percent = 250)
+
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput {
+            down(0, Offset(width * 0.4f, centerY))
+            down(1, Offset(width * 0.6f, centerY))
+            up(1)
+            up(0)
+        }
+        nextFrame()
+        assertScale(id = 1, percent = 250)
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput { click() }
+        nextFrame()
+        assertScale(id = 1, percent = 100)
+        compose.runOnIdle { assertEquals(emptyList<Pair<Long, Boolean>>(), reviewed) }
+
+        swipePhoto(id = 1, keep = true)
+        compose.runOnIdle { assertEquals(listOf(1L to true), reviewed) }
+    }
+
+    @Test
+    fun resetTapToleratesSmallFingerMovement() {
+        showPhotos()
+        pinchPhoto(startRadius = 0.1f, endRadius = 0.25f)
+
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput {
+            down(center)
+            moveBy(Offset(1f, 1f))
+            up()
+        }
+        nextFrame()
+        assertScale(id = 1, percent = 100)
+
+        swipePhoto(id = 1, keep = false)
+        compose.runOnIdle { assertEquals(listOf(1L to false), reviewed) }
+    }
+
+    @Test
+    fun tapAtOriginalScaleKeepsPhotoAndAllowsSwipe() {
+        showPhotos()
+
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput { click() }
+        nextFrame()
+        assertScale(id = 1, percent = 100)
+        compose.runOnIdle { assertEquals(emptyList<Pair<Long, Boolean>>(), reviewed) }
+
+        swipePhoto(id = 1, keep = false)
+        compose.runOnIdle { assertEquals(listOf(1L to false), reviewed) }
+    }
+
+    @Test
+    fun cancelledSwipeDoesNotReviewPhoto() {
+        showPhotos()
+
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput {
+            down(Offset(width * 0.1f, centerY))
+            moveTo(Offset(width * 0.9f, centerY))
+            cancel()
+        }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.runOnIdle { assertEquals(emptyList<Pair<Long, Boolean>>(), reviewed) }
+
+        swipePhoto(id = 1, keep = true)
+        compose.runOnIdle { assertEquals(listOf(1L to true), reviewed) }
+    }
 
     @Test
     fun consecutiveSwipesAdvanceBeforeExitAnimationsFinish() {
@@ -129,7 +304,6 @@ class SwipeContentTest {
                     progress = index to photos.size,
                     onDelete = { review(false) },
                     onKeep = { review(true) },
-                    onPhotoTap = {},
                     canUndo = canUndo,
                     onUndo = {
                         reviewed.removeAt(reviewed.lastIndex)
@@ -150,6 +324,25 @@ class SwipeContentTest {
             swipe(Offset(startX, centerY), Offset(endX, centerY), durationMillis = 48)
         }
         nextFrame()
+    }
+
+    private fun pinchPhoto(startRadius: Float, endRadius: Float) {
+        compose.onNodeWithContentDescription("Photo 1").performTouchInput {
+            pinch(
+                start0 = center - Offset(width * startRadius, 0f),
+                end0 = center - Offset(width * endRadius, 0f),
+                start1 = center + Offset(width * startRadius, 0f),
+                end1 = center + Offset(width * endRadius, 0f),
+                durationMillis = 96
+            )
+        }
+        nextFrame()
+    }
+
+    private fun assertScale(id: Long, percent: Int) {
+        compose.onNodeWithContentDescription("Photo $id").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Масштаб: $percent%")
+        )
     }
 
     private fun nextFrame() {

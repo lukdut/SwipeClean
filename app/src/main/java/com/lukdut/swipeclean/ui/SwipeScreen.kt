@@ -7,7 +7,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -96,7 +96,8 @@ private const val DISMISS_DURATION_MS = 280
 private data class DismissedPhoto(
     val photo: MediaPhoto,
     val startOffset: Offset,
-    val keep: Boolean
+    val keep: Boolean,
+    val zoomState: PhotoZoomState
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -121,7 +122,6 @@ fun SwipeScreen(
     val priorityReason = swipeState.priorityReason
     val loadError by viewModel.loadError.collectAsState()
 
-    var viewerPhoto by remember { mutableStateOf<MediaPhoto?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(swipeState.undoError) {
         swipeState.undoError?.let {
@@ -145,13 +145,6 @@ fun SwipeScreen(
                 .build()
             context.imageLoader.enqueue(request)
         }
-    }
-
-    viewerPhoto?.let { photo ->
-        PhotoViewerDialog(
-            photo = photo,
-            onDismiss = { viewerPhoto = null }
-        )
     }
 
     Scaffold(
@@ -252,7 +245,6 @@ fun SwipeScreen(
                     progress = progress,
                     onDelete = { viewModel.markForDeletion() },
                     onKeep = { viewModel.keep() },
-                    onPhotoTap = { viewerPhoto = currentPhoto },
                     canUndo = swipeState.canUndo,
                     actionsEnabled = !swipeState.undoing,
                     onUndo = viewModel::undoLastReview,
@@ -339,7 +331,6 @@ internal fun SwipeContent(
     progress: Pair<Int, Int>,
     onDelete: () -> Unit,
     onKeep: () -> Unit,
-    onPhotoTap: () -> Unit,
     canUndo: Boolean = false,
     actionsEnabled: Boolean = true,
     onUndo: () -> Unit = {},
@@ -348,6 +339,7 @@ internal fun SwipeContent(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val dismissedPhotos = remember { mutableStateListOf<DismissedPhoto>() }
+    val zoomState = remember(currentPhoto.id) { PhotoZoomState() }
     var dragOffset by remember(currentPhoto.id) { mutableStateOf(Offset.Zero) }
     var isDragging by remember(currentPhoto.id) { mutableStateOf(false) }
     var isDismissed by remember(currentPhoto.id) { mutableStateOf(false) }
@@ -362,7 +354,8 @@ internal fun SwipeContent(
         dismissedPhotos += DismissedPhoto(
             photo = currentPhoto,
             startOffset = if (isDragging) dragOffset else animatedOffset.value,
-            keep = keep
+            keep = keep,
+            zoomState = zoomState
         )
         // Advance immediately; the outgoing card finishes its animation independently.
         if (keep) onKeep() else onDelete()
@@ -436,11 +429,16 @@ internal fun SwipeContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput("tap_${currentPhoto.id}") {
-                        detectTapGestures(onTap = { if (!isDismissed) onPhotoTap() })
+                        detectTapGestures(onTap = { if (!isDismissed) zoomState.reset() })
                     }
                     .pointerInput(currentPhoto.id, cardWidthPx, actionsEnabled) {
                         if (!actionsEnabled) return@pointerInput
-                        detectDragGestures(
+                        detectPhotoGestures(
+                            isZoomed = { zoomState.isZoomed },
+                            onTransformStart = { returnToCenter() },
+                            onTransform = { centroid, pan, zoom ->
+                                if (!isDismissed) zoomState.transform(centroid, pan, zoom, size)
+                            },
                             onDragStart = {
                                 returnAnimation?.cancel()
                                 if (!isDragging) dragOffset = animatedOffset.value
@@ -455,8 +453,7 @@ internal fun SwipeContent(
                                 }
                             },
                             onDragCancel = { returnToCenter() },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
+                            onDrag = { dragAmount ->
                                 dragOffset += dragAmount
                             }
                         )
@@ -466,6 +463,7 @@ internal fun SwipeContent(
                     PhotoCard(
                         photo = currentPhoto,
                         swipeFraction = swipeFraction,
+                        zoomState = zoomState,
                         modifier = Modifier
                             .fillMaxSize()
                             .offset { IntOffset(visualOffset.x.roundToInt(), visualOffset.y.roundToInt()) }
@@ -552,6 +550,7 @@ private fun DismissedPhotoCard(
     PhotoCard(
         photo = dismissed.photo,
         swipeFraction = (offsetX.value / (cardWidthPx * SWIPE_THRESHOLD_FRACTION)).coerceIn(-1f, 1f),
+        zoomState = dismissed.zoomState,
         modifier = Modifier
             .fillMaxSize()
             .offset { IntOffset(offsetX.value.roundToInt(), dismissed.startOffset.y.roundToInt()) }
@@ -621,17 +620,31 @@ internal fun SortMenu(
 private fun PhotoCard(
     photo: MediaPhoto,
     modifier: Modifier = Modifier,
-    swipeFraction: Float = 0f
+    swipeFraction: Float = 0f,
+    zoomState: PhotoZoomState? = null
 ) {
     Box(
         // Hide the next photo behind the fitted image's margins without a visible card frame.
-        modifier = modifier.background(MaterialTheme.colorScheme.background)
+        modifier = modifier.background(MaterialTheme.colorScheme.background).clipToBounds()
     ) {
         AsyncImage(
             model = photo.uri,
             contentDescription = photo.displayName,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize()
+            onSuccess = { zoomState?.imageSize = it.painter.intrinsicSize },
+            modifier = Modifier
+                .fillMaxSize()
+                .semantics {
+                    if (zoomState != null) {
+                        stateDescription = "Масштаб: ${(zoomState.scale * 100).roundToInt()}%"
+                    }
+                }
+                .graphicsLayer {
+                    scaleX = zoomState?.scale ?: 1f
+                    scaleY = zoomState?.scale ?: 1f
+                    translationX = zoomState?.offset?.x ?: 0f
+                    translationY = zoomState?.offset?.y ?: 0f
+                }
         )
 
         // Delete overlay (swipe left)
