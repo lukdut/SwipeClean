@@ -113,7 +113,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Handle MediaStore delete request (API 30+)
+                    // Handle the system trash or permanent deletion request (API 30+).
                     val deleteLauncher = rememberLauncherForActivityResult(
                         ActivityResultContracts.StartIntentSenderForResult()
                     ) { result ->
@@ -177,6 +177,7 @@ class MainActivity : ComponentActivity() {
                             feedbackCount = feedbackCount,
                             feedbackReset = feedbackReset,
                             onPersonalization = viewModel::setPersonalization,
+                            onDeletionMode = viewModel::setDeletionMode,
                             onForgetFeedback = viewModel::forgetFeedback,
                             isLoading = isLoading,
                             onSortOrder = viewModel::setSortOrder,

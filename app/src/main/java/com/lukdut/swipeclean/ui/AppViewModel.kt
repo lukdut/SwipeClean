@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.lukdut.swipeclean.analysis.AnalysisCoordinator
 import com.lukdut.swipeclean.analysis.AnalysisProgress
 import com.lukdut.swipeclean.data.AnalysisHistoryRepository
+import com.lukdut.swipeclean.data.DeletionMode
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.MediaStoreRepository
 import com.lukdut.swipeclean.data.PhotoQuality
@@ -113,6 +114,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var reviewVisible = false
     private var appVisible = false
     private var deleteRequestedPhotos: List<MediaPhoto> = emptyList()
+    private var deleteRequestedMode: DeletionMode? = null
 
     private val _settings = MutableStateFlow(settingsRepository.load())
     private val _allPhotos = MutableStateFlow<List<MediaPhoto>>(emptyList())
@@ -128,6 +130,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _feedbackReset = MutableStateFlow(ProgressResetState())
     private val _feedbackCount = MutableStateFlow(0)
     private val _deletePreparation = MutableStateFlow(DeletePreparation())
+    private val _deletionModePrompt = MutableStateFlow(false)
 
     val settings: StateFlow<PhotoSettings> = _settings.asStateFlow()
     val analysisProgress: StateFlow<AnalysisProgress> = _analysisProgress.asStateFlow()
@@ -137,6 +140,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val feedbackReset: StateFlow<ProgressResetState> = _feedbackReset.asStateFlow()
     val feedbackCount: StateFlow<Int> = _feedbackCount.asStateFlow()
     val deletePreparation: StateFlow<DeletePreparation> = _deletePreparation.asStateFlow()
+    val deletionModePrompt: StateFlow<Boolean> = _deletionModePrompt.asStateFlow()
     val sortOrder = _settings.map { it.sortOrder }
         .stateIn(viewModelScope, SharingStarted.Eagerly, _settings.value.sortOrder)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -215,10 +219,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = true
             _loadError.value = null
             try {
-                val photos = repository.loadAllPhotos()
+                var photos = repository.loadAllPhotos()
                 if (onlyIfChanged && photosLoaded && photos == _allPhotos.value) return@launch
                 AnalysisCoordinator.clearFinishedProgress()
                 val reviews = reviewMutex.withLock {
+                    val pendingIds = dao.getAll().filter { it.status == PhotoReviewStatus.TRASH }.map { it.mediaStoreId }
+                    // Android may have completed a request while this process was gone.
+                    // Only an actual trash flag confirms a move; missing files prove nothing.
+                    val systemTrashedIds = repository.loadSystemTrashedIds(pendingIds)
+                    feedbackRepository.reconcilePendingSystemTrash(systemTrashedIds)
+                    systemTrashedIds.forEach { reviewOverrides[it] = null }
+                    photos = photos.filterNot { it.id in systemTrashedIds }
+                    // A photo visible again may have been restored through the system gallery.
+                    feedbackRepository.reconcileSystemTrash(photos.map { it.id })
                     dao.getAll().associateBy { it.mediaStoreId }.toMutableMap()
                 }
                 val cached = analysisDao.getAll()
@@ -261,6 +274,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setPersonalization(priority: Priority) {
         updateSettings(_settings.value.copy(personalization = priority))
         schedulePersonalRanking()
+    }
+
+    fun setDeletionMode(mode: DeletionMode) {
+        if (_deletePreparation.value.running || _pendingDeleteSender.value != null ||
+            (mode == DeletionMode.SYSTEM_TRASH && Build.VERSION.SDK_INT < Build.VERSION_CODES.R)) return
+        // A removal preference must not reorder the photo currently being reviewed.
+        _settings.value = _settings.value.copy(deletionMode = mode, deletionModeConfirmed = true)
+        settingsRepository.save(_settings.value)
+    }
+
+    fun dismissDeletionModePrompt() {
+        _deletionModePrompt.value = false
+    }
+
+    fun confirmDeletionMode(mode: DeletionMode, contentResolver: ContentResolver) {
+        setDeletionMode(mode)
+        _deletionModePrompt.value = false
+        requestDelete(contentResolver)
     }
 
     fun forgetFeedback() {
@@ -561,6 +592,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (undoing || _isLoading.value || _deletePreparation.value.running || _pendingDeleteSender.value != null) return
         val photos = _allPhotos.value.filter { it.id in _markedAt.value }
         if (photos.isEmpty()) return
+        val mode = _settings.value.deletionMode
+        if (!_settings.value.deletionModeConfirmed ||
+            (mode == DeletionMode.SYSTEM_TRASH && Build.VERSION.SDK_INT < Build.VERSION_CODES.R)) {
+            _deletionModePrompt.value = true
+            return
+        }
         _deletePreparation.value = DeletePreparation(running = true, total = photos.size)
         deletePreparationJob = viewModelScope.launch {
             try {
@@ -591,8 +628,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 ensureActive()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    val pendingIntent = android.provider.MediaStore.createDeleteRequest(contentResolver, photos.map { it.uri })
+                    val uris = photos.map { it.uri }
+                    val pendingIntent = when (mode) {
+                        DeletionMode.SYSTEM_TRASH -> android.provider.MediaStore.createTrashRequest(contentResolver, uris, true)
+                        DeletionMode.PERMANENT -> android.provider.MediaStore.createDeleteRequest(contentResolver, uris)
+                    }
                     deleteRequestedPhotos = photos
+                    deleteRequestedMode = mode
                     _pendingDeleteSender.value = pendingIntent.intentSender
                 } else {
                     val deletedIds = mutableSetOf<Long>()
@@ -608,13 +650,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     } finally {
-                        removeDeleted(photos.filter { it.id in deletedIds })
+                        removeDeleted(photos.filter { it.id in deletedIds }, DeletionMode.PERMANENT)
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                _deletePreparation.update { it.copy(error = "Не удалось запросить удаление. Попробуйте ещё раз.") }
+                _deletePreparation.update { it.copy(error = if (mode == DeletionMode.SYSTEM_TRASH)
+                    "Не удалось переместить фото в системную корзину. Попробуйте ещё раз."
+                    else "Не удалось запросить удаление. Попробуйте ещё раз.") }
             } finally {
                 _deletePreparation.update { it.copy(running = false) }
                 AnalysisCoordinator.clearFinishedProgress()
@@ -628,11 +672,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onDeleteCompleted() {
-        removeDeleted(deleteRequestedPhotos)
+        deleteRequestedMode?.let { removeDeleted(deleteRequestedPhotos, it) }
         clearDeleteRequest()
     }
 
-    private fun removeDeleted(deletedPhotos: List<MediaPhoto>) {
+    private fun removeDeleted(deletedPhotos: List<MediaPhoto>, mode: DeletionMode) {
         if (deletedPhotos.isEmpty()) return
         val ids = deletedPhotos.map { it.id }.toSet()
         undoHistory.removeAll { it.id in ids }
@@ -643,7 +687,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             AnalysisCoordinator.pauseAndJoin()
-            reviewMutex.withLock { feedbackRepository.deleted(deletedPhotos) }
+            reviewMutex.withLock {
+                when (mode) {
+                    DeletionMode.SYSTEM_TRASH -> feedbackRepository.systemTrashed(deletedPhotos)
+                    DeletionMode.PERMANENT -> feedbackRepository.deleted(deletedPhotos)
+                }
+            }
             AnalysisCoordinator.clearFinishedProgress()
             refreshAnalysisProgress()
         }
@@ -656,6 +705,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearDeleteRequest() {
         deleteRequestedPhotos = emptyList()
+        deleteRequestedMode = null
         _pendingDeleteSender.value = null
     }
 }

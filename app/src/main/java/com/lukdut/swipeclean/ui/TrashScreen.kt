@@ -1,5 +1,6 @@
 package com.lukdut.swipeclean.ui
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +19,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,6 +30,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,6 +48,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.lukdut.swipeclean.data.MediaPhoto
+import com.lukdut.swipeclean.data.DeletionMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,8 +70,22 @@ fun TrashScreen(
 ) {
     val markedPhotos by viewModel.markedPhotos.collectAsState()
     val preparation by viewModel.deletePreparation.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    val showModePrompt by viewModel.deletionModePrompt.collectAsState()
+    val pendingRequest by viewModel.pendingDeleteSender.collectAsState()
+    val actionsEnabled = !preparation.running && pendingRequest == null
+    val systemTrashUnavailable = settings.deletionMode == DeletionMode.SYSTEM_TRASH &&
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.R
     val contentResolver = LocalContext.current.contentResolver
     var viewerPhoto by remember { mutableStateOf<com.lukdut.swipeclean.data.MediaPhoto?>(null) }
+
+    if (showModePrompt) {
+        DeletionModeDialog(
+            initialMode = settings.deletionMode,
+            onConfirm = { viewModel.confirmDeletionMode(it, contentResolver) },
+            onDismiss = viewModel::dismissDeletionModePrompt
+        )
+    }
 
     viewerPhoto?.let { photo ->
         PhotoViewerDialog(
@@ -99,8 +119,19 @@ fun TrashScreen(
                     color = MaterialTheme.colorScheme.surface
                 ) {
                     Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 8.dp)) {
+                        Text(
+                            text = when {
+                                systemTrashUnavailable -> "На этой версии Android системная корзина недоступна. Выберите способ удаления."
+                                settings.deletionMode == DeletionMode.SYSTEM_TRASH ->
+                                    "Фото будут перемещены в системную корзину. Место освободится после окончательного удаления."
+                                else -> "Фото будут удалены навсегда, без возможности восстановления через корзину."
+                            },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         if (preparation.running) {
-                            Text("Подготавливаем удаление: ${preparation.completed} из ${preparation.total}",
+                            Text("Подготавливаем фото: ${preparation.completed} из ${preparation.total}",
                                 modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodyMedium)
                             LinearProgressIndicator(progress = {
                                 preparation.completed.toFloat() / preparation.total.coerceAtLeast(1)
@@ -117,7 +148,7 @@ fun TrashScreen(
                         ) {
                             OutlinedButton(
                                 onClick = { viewModel.restoreAll() },
-                                enabled = !preparation.running,
+                                enabled = actionsEnabled,
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(
@@ -130,19 +161,25 @@ fun TrashScreen(
                             }
                             Button(
                                 onClick = { viewModel.requestDelete(contentResolver) },
-                                enabled = !preparation.running,
+                                enabled = actionsEnabled,
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error
+                                    containerColor = if (settings.deletionMode == DeletionMode.SYSTEM_TRASH)
+                                        MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                                 ),
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(
-                                    Icons.Default.DeleteForever,
+                                    if (settings.deletionMode == DeletionMode.SYSTEM_TRASH)
+                                        Icons.Default.Delete else Icons.Default.DeleteForever,
                                     contentDescription = null,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(Modifier.width(6.dp))
-                                Text("Удалить все")
+                                Text(when {
+                                    systemTrashUnavailable -> "Выбрать режим"
+                                    settings.deletionMode == DeletionMode.SYSTEM_TRASH -> "В системную корзину"
+                                    else -> "Удалить навсегда"
+                                })
                             }
                         }
                     }
@@ -165,7 +202,7 @@ fun TrashScreen(
                 items(markedPhotos, key = { it.id }) { photo ->
                     TrashPhotoItem(
                         photo = photo,
-                        canRestore = !preparation.running,
+                        canRestore = actionsEnabled,
                         onRestore = { viewModel.restorePhoto(photo.id) },
                         onOpen = { viewerPhoto = photo }
                     )
@@ -173,6 +210,35 @@ fun TrashScreen(
             }
         }
     }
+}
+
+@Composable
+internal fun DeletionModeDialog(
+    initialMode: DeletionMode,
+    onConfirm: (DeletionMode) -> Unit,
+    onDismiss: () -> Unit,
+    systemTrashSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+) {
+    var selected by rememberSaveable { mutableStateOf(initialMode) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Как удалять фотографии?") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Запомним выбор. Его можно изменить в настройках.")
+                DeletionModeOptions(selected, { selected = it }, systemTrashSupported)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selected != DeletionMode.SYSTEM_TRASH || systemTrashSupported,
+                onClick = { onConfirm(selected) }
+            ) {
+                Text(if (selected == DeletionMode.SYSTEM_TRASH) "В системную корзину" else "Удалить навсегда")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 @Composable

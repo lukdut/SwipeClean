@@ -17,7 +17,9 @@ data class PhotoSettings(
     val dark: Priority = Priority.NORMAL,
     val bright: Priority = Priority.NORMAL,
     val lowDetail: Priority = Priority.NORMAL,
-    val personalization: Priority = Priority.NORMAL
+    val personalization: Priority = Priority.NORMAL,
+    val deletionMode: DeletionMode = DeletionMode.SYSTEM_TRASH,
+    val deletionModeConfirmed: Boolean = false
 ) {
     val hasEnabledSignals: Boolean get() = personalization != Priority.OFF ||
         QualitySignal.entries.any { priority(it) != Priority.OFF }

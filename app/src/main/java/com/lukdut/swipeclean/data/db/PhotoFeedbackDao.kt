@@ -31,6 +31,15 @@ interface PhotoFeedbackDao {
     @Query("UPDATE photo_feedback SET decision = 'DELETED' WHERE photoKey IN (:keys) AND decision = 'TRASH'")
     suspend fun confirmDeleted(keys: Collection<String>)
 
+    @Query("UPDATE photo_feedback SET decision = 'SYSTEM_TRASH' WHERE photoKey IN (:keys) AND decision = 'TRASH'")
+    suspend fun confirmSystemTrash(keys: Collection<String>)
+
+    @Query("UPDATE photo_feedback SET decision = 'SYSTEM_TRASH' WHERE mediaStoreId IN (:ids) AND decision = 'TRASH'")
+    suspend fun confirmSystemTrashByIds(ids: Collection<Long>)
+
+    @Query("DELETE FROM photo_feedback WHERE mediaStoreId IN (:ids) AND decision = 'SYSTEM_TRASH'")
+    suspend fun undoSystemTrash(ids: Collection<Long>)
+
     @Query("DELETE FROM photo_feedback")
     suspend fun deleteAll()
 

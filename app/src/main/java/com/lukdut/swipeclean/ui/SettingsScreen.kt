@@ -1,5 +1,6 @@
 package com.lukdut.swipeclean.ui
 
+import android.os.Build
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.lukdut.swipeclean.analysis.AnalysisProgress
+import com.lukdut.swipeclean.data.DeletionMode
 import com.lukdut.swipeclean.data.PhotoSettings
 import com.lukdut.swipeclean.data.Priority
 import com.lukdut.swipeclean.data.QualitySignal
@@ -84,7 +86,9 @@ fun SettingsScreen(
     onForgetFeedback: () -> Unit = {},
     modelState: ModelState = ModelState(),
     onCheckModelUpdate: () -> Unit = {},
-    onUpdateModel: () -> Unit = {}
+    onUpdateModel: () -> Unit = {},
+    onDeletionMode: (DeletionMode) -> Unit = {},
+    systemTrashSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 ) {
     var showResetConfirmation by rememberSaveable { mutableStateOf(false) }
     var showForgetConfirmation by rememberSaveable { mutableStateOf(false) }
@@ -202,6 +206,18 @@ fun SettingsScreen(
                         }
                     }
                 }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("Удаление фотографий")
+                Text("Этот режим применяется при очистке корзины приложения.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DeletionModeOptions(
+                    selected = settings.deletionMode,
+                    onSelect = onDeletionMode,
+                    systemTrashSupported = systemTrashSupported
+                )
             }
 
             AnalysisCard(

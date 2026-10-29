@@ -54,4 +54,33 @@ class PhotoFeedbackRepository(private val db: AppDatabase) {
         db.photoReviewDao().deleteByIds(photos.map { it.id })
         db.photoAnalysisDao().deleteByIds(photos.map { it.id })
     }
+
+    suspend fun systemTrashed(photos: List<MediaPhoto>) = db.withTransaction {
+        feedback.confirmSystemTrash(photos.map { it.feedbackKey() })
+        feedback.trim(FeedbackDecision.SYSTEM_TRASH.name)
+        db.photoReviewDao().deleteByIds(photos.map { it.id })
+        db.photoAnalysisDao().deleteByIds(photos.map { it.id })
+    }
+
+    suspend fun reconcilePendingSystemTrash(ids: Collection<Long>) = db.withTransaction {
+        if (ids.isEmpty()) return@withTransaction
+        // Recover an interrupted result callback only from rows positively identified as
+        // trashed by MediaStore. A later explicit review takes precedence over recovery.
+        val pending = ids.toSet().intersect(
+            db.photoReviewDao().getIdsByStatus(PhotoReviewStatus.TRASH).toSet())
+        pending.chunked(500).forEach { batch ->
+            feedback.confirmSystemTrashByIds(batch)
+            db.photoReviewDao().deleteByIds(batch)
+            db.photoAnalysisDao().deleteByIds(batch)
+        }
+        if (pending.isNotEmpty()) feedback.trim(FeedbackDecision.SYSTEM_TRASH.name)
+    }
+
+    suspend fun reconcileSystemTrash(availableIds: Collection<Long>) = db.withTransaction {
+        // Normal MediaStore queries exclude trashed files. A visible file has returned from
+        // system trash; the earlier decision must no longer influence recommendations.
+        // Match the ID because moving out of trash can change the file's revision key.
+        // Keep below the SQLite bind limit even for galleries with thousands of files.
+        availableIds.chunked(500).forEach { feedback.undoSystemTrash(it) }
+    }
 }

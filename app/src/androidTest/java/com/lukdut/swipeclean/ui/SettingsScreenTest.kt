@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.lukdut.swipeclean.data.PhotoSettings
+import com.lukdut.swipeclean.data.DeletionMode
 import com.lukdut.swipeclean.data.TestModelFixture
 import com.lukdut.swipeclean.data.model.ModelState
 import com.lukdut.swipeclean.data.model.InstalledModel
@@ -47,6 +48,25 @@ class SettingsScreenTest {
     private var pauses = 0
     private var resets = 0
     private var forgotten = 0
+
+    @Test fun deletionModeStartsWithSystemTrashAndCanBeChangedWithoutDeleting() {
+        showSettings(AnalysisProgress(total = 10))
+        compose.onNodeWithText(DeletionMode.SYSTEM_TRASH.label).performScrollTo().assertIsSelected()
+        compose.onNodeWithText(DeletionMode.PERMANENT.label).performScrollTo().performClick()
+        compose.onNodeWithText(DeletionMode.PERMANENT.label).assertIsSelected()
+        compose.onNodeWithText(DeletionMode.SYSTEM_TRASH.label).performScrollTo().performClick()
+        compose.onNodeWithText(DeletionMode.SYSTEM_TRASH.label).assertIsSelected()
+        compose.runOnIdle { assertEquals(0, starts); assertEquals(0, resets) }
+    }
+
+    @Test fun unsupportedSystemTrashRequiresAnExplicitPermanentChoice() {
+        showSettings(AnalysisProgress(total = 10), systemTrashSupported = false)
+        compose.onNodeWithText(DeletionMode.SYSTEM_TRASH.label).performScrollTo()
+            .assertIsSelected().assertIsNotEnabled()
+        compose.onNodeWithText(DeletionMode.PERMANENT.label).performScrollTo().assertIsNotSelected()
+            .performClick().assertIsSelected()
+        compose.onNodeWithText(DeletionMode.SYSTEM_TRASH.label).performScrollTo().assertIsNotSelected()
+    }
 
     @Test
     fun bothSortDirectionsAreSelectableWithoutAnalysisOnACompactScreen() {
@@ -176,7 +196,8 @@ class SettingsScreenTest {
         compose.runOnIdle { assertEquals(1, starts) }
     }
 
-    private fun showSettings(progress: AnalysisProgress, openAtAnalysis: Boolean = false, compact: Boolean = false, model: ModelState = installedModel) {
+    private fun showSettings(progress: AnalysisProgress, openAtAnalysis: Boolean = false, compact: Boolean = false,
+        model: ModelState = installedModel, systemTrashSupported: Boolean = true) {
         compose.setContent {
             var settings by remember { mutableStateOf(PhotoSettings()) }
             var analysis by remember { mutableStateOf(progress) }
@@ -191,6 +212,8 @@ class SettingsScreenTest {
                         onSortOrder = { settings = settings.copy(sortOrder = it) },
                         onPriority = { signal, priority -> settings = settings.withPriority(signal, priority) },
                         onPersonalization = { settings = settings.copy(personalization = it) },
+                        onDeletionMode = { settings = settings.copy(deletionMode = it, deletionModeConfirmed = true) },
+                        systemTrashSupported = systemTrashSupported,
                         onForgetFeedback = { forgotten++ },
                         onStartAnalysis = { starts++ },
                         onPauseAnalysis = { pauses++; analysis = analysis.copy(running = false) },

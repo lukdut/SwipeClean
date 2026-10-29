@@ -7,7 +7,7 @@ import kotlin.math.ln
 import kotlin.math.sqrt
 
 enum class FeedbackDecision(val weight: Float, val direction: Float) {
-    KEPT(1f, -1f), TRASH(0.5f, 1f), DELETED(1f, 1f)
+    KEPT(1f, -1f), TRASH(0.5f, 1f), SYSTEM_TRASH(0.5f, 1f), DELETED(1f, 1f)
 }
 
 data class FeedbackExample(
