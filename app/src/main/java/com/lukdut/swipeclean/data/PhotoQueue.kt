@@ -16,7 +16,9 @@ data class PhotoQueue(val photos: List<MediaPhoto> = emptyList(), val index: Int
         } else emptyMap()
         val comparator = when (settings.sortOrder) {
             SortOrder.ByDateDesc -> compareByDescending<MediaPhoto> { it.dateAdded }
+            SortOrder.ByDateAsc -> compareBy<MediaPhoto> { it.dateAdded }
             SortOrder.BySizeDesc -> compareByDescending<MediaPhoto> { it.size }
+            SortOrder.BySizeAsc -> compareBy<MediaPhoto> { it.size }
             SortOrder.ByPotentiallyUnwanted -> compareByDescending<MediaPhoto> { scores[it.id] ?: 0f }
         }.thenByDescending { it.dateAdded }.thenByDescending { it.id }
         return copy(photos = photos.take(fixedCount) + photos.drop(fixedCount).sortedWith(comparator))

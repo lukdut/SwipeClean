@@ -44,11 +44,59 @@ class PhotoQueueTest {
     }
 
     @Test
-    fun sizeSortWorksWithoutAnalysis() {
-        val reordered = PhotoQueue(photos).reorder(
-            PhotoSettings(sortOrder = SortOrder.BySizeDesc), emptyMap(), false
+    fun dateAndSizeSortInBothDirectionsWithoutAnalysis() {
+        val shuffled = listOf(photos[3], photos[0], photos[5], photos[1], photos[4], photos[2])
+        val expectedOrders = listOf(
+            SortOrder.ByDateDesc to listOf(1L, 2L, 3L, 4L, 5L, 6L),
+            SortOrder.ByDateAsc to listOf(6L, 5L, 4L, 3L, 2L, 1L),
+            SortOrder.BySizeDesc to listOf(6L, 5L, 4L, 3L, 2L, 1L),
+            SortOrder.BySizeAsc to listOf(1L, 2L, 3L, 4L, 5L, 6L)
         )
-        assertEquals(photos.reversed(), reordered.photos)
+        for ((order, expectedIds) in expectedOrders) {
+            val reordered = PhotoQueue(shuffled).reorder(
+                PhotoSettings(sortOrder = order), emptyMap(), preserveVisible = false
+            )
+            assertEquals(order.name, expectedIds, reordered.photos.map { it.id })
+        }
+    }
+
+    @Test
+    fun switchingDirectionsPreservesReviewedPhotosAndChangesTheCurrentPhoto() {
+        var queue = PhotoQueue(photos, index = 2)
+        val expectedOrders = listOf(
+            SortOrder.ByDateAsc to listOf(1L, 2L, 6L, 5L, 4L, 3L),
+            SortOrder.ByDateDesc to listOf(1L, 2L, 3L, 4L, 5L, 6L),
+            SortOrder.BySizeDesc to listOf(1L, 2L, 6L, 5L, 4L, 3L),
+            SortOrder.BySizeAsc to listOf(1L, 2L, 3L, 4L, 5L, 6L)
+        )
+        for ((order, expectedIds) in expectedOrders) {
+            queue = queue.reorder(PhotoSettings(sortOrder = order), emptyMap(), preserveVisible = false)
+            assertEquals(order.name, expectedIds, queue.photos.map { it.id })
+            assertEquals(2, queue.index)
+            assertEquals(expectedIds[2], queue.current?.id)
+            assertEquals(expectedIds[3], queue.next?.id)
+        }
+    }
+
+    @Test
+    fun equalValuesHaveDeterministicDateAndIdTieBreakersInBothDirections() {
+        val tiedPhotos = listOf(
+            photos[0].copy(dateAdded = 5, size = 100),
+            photos[1].copy(dateAdded = 7, size = 100),
+            photos[2].copy(dateAdded = 7, size = 100)
+        )
+        val expectedOrders = listOf(
+            SortOrder.ByDateDesc to listOf(3L, 2L, 1L),
+            SortOrder.ByDateAsc to listOf(1L, 3L, 2L),
+            SortOrder.BySizeDesc to listOf(3L, 2L, 1L),
+            SortOrder.BySizeAsc to listOf(3L, 2L, 1L)
+        )
+        for ((order, expectedIds) in expectedOrders) {
+            val reordered = PhotoQueue(tiedPhotos).reorder(
+                PhotoSettings(sortOrder = order), emptyMap(), preserveVisible = false
+            )
+            assertEquals(order.name, expectedIds, reordered.photos.map { it.id })
+        }
     }
 
     @Test

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
@@ -39,6 +40,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -75,6 +77,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -651,27 +655,47 @@ internal fun SortMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
-            SortOrder.all.forEach { order ->
-                val needsAnalysis = order == SortOrder.ByPotentiallyUnwanted && !hasAnalysisResults
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            order.label,
-                            fontWeight = if (order == current) FontWeight.Bold else FontWeight.Normal,
-                            color = when {
-                                order == current -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurface
+            SortOrder.groups.entries.forEachIndexed { index, (groupLabel, orders) ->
+                if (index > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                if (groupLabel != null) {
+                    Text(
+                        groupLabel,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp).semantics { heading() },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                orders.forEach { order ->
+                    val needsAnalysis = order == SortOrder.ByPotentiallyUnwanted && !hasAnalysisResults
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                order.label,
+                                fontWeight = if (order == current) FontWeight.Bold else FontWeight.Normal,
+                                color = when {
+                                    order == current -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                        },
+                        trailingIcon = {
+                            if (order == current) {
+                                Icon(Icons.Default.Check, contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary)
+                            } else {
+                                Spacer(Modifier.size(24.dp))
                             }
-                        )
-                    },
-                    modifier = Modifier.semantics {
-                        if (needsAnalysis) stateDescription = "Сначала выполните анализ в настройках"
-                    },
-                    onClick = {
-                        expanded = false
-                        if (needsAnalysis) onOpenAnalysis() else onSelect(order)
-                    }
-                )
+                        },
+                        modifier = Modifier.semantics {
+                            selected = order == current
+                            if (needsAnalysis) stateDescription = "Сначала выполните анализ в настройках"
+                        },
+                        onClick = {
+                            expanded = false
+                            if (needsAnalysis) onOpenAnalysis() else onSelect(order)
+                        }
+                    )
+                }
             }
         }
     }

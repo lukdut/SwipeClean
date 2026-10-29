@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -46,6 +47,27 @@ class SettingsScreenTest {
     private var pauses = 0
     private var resets = 0
     private var forgotten = 0
+
+    @Test
+    fun bothSortDirectionsAreSelectableWithoutAnalysisOnACompactScreen() {
+        showSettings(AnalysisProgress(total = 100), compact = true)
+        compose.onNodeWithText("По дате").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("По размеру").performScrollTo().assertIsDisplayed()
+
+        val orders = listOf(SortOrder.ByDateAsc, SortOrder.BySizeAsc,
+            SortOrder.ByDateDesc, SortOrder.BySizeDesc)
+        for (order in orders) {
+            compose.onNodeWithText(order.label).performScrollTo().performClick()
+            compose.onNodeWithText(order.label).assertIsSelected()
+            SortOrder.entries.filter { it != order }.forEach { other ->
+                compose.onNodeWithText(other.label).assertIsNotSelected()
+            }
+        }
+        compose.runOnIdle {
+            assertEquals(0, starts)
+            assertEquals(0, resets)
+        }
+    }
 
     @Test
     fun personalPriorityAndHistoryResetDoNotStartAnalysis() {
@@ -88,7 +110,7 @@ class SettingsScreenTest {
     @Test
     fun selectingSmartSortAndPrioritiesDoesNotStartAnalysis() {
         showSettings(AnalysisProgress(total = 100))
-        compose.onNodeWithText(SortOrder.ByPotentiallyUnwanted.label).performClick()
+        compose.onNodeWithText(SortOrder.ByPotentiallyUnwanted.label).performScrollTo().performClick()
         compose.onNodeWithContentDescription("Размытие: Высокий").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Размытие: Высокий").assertIsSelected()
         compose.runOnIdle { assertEquals(0, starts) }

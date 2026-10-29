@@ -23,6 +23,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -47,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -159,33 +161,44 @@ fun SettingsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionTitle("Порядок фотографий")
                 Column(Modifier.selectableGroup()) {
-                    SortOrder.entries.forEach { order ->
-                        val needsAnalysis = order == SortOrder.ByPotentiallyUnwanted && !hasAnalysisResults
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = settings.sortOrder == order,
-                                    role = Role.RadioButton,
-                                    onClick = {
-                                        if (needsAnalysis) {
-                                            coroutineScope.launch { analysisButtonRequester.bringIntoView() }
-                                        } else onSortOrder(order)
-                                    }
-                                )
-                                .semantics {
-                                    if (needsAnalysis) stateDescription = "Сначала выполните анализ ниже"
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            RadioButton(
-                                selected = settings.sortOrder == order,
-                                onClick = null
+                    SortOrder.groups.entries.forEachIndexed { index, (groupLabel, orders) ->
+                        if (index > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        if (groupLabel != null) {
+                            Text(
+                                groupLabel,
+                                modifier = Modifier.padding(vertical = 8.dp).semantics { heading() },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(order.label, style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        orders.forEach { order ->
+                            val needsAnalysis = order == SortOrder.ByPotentiallyUnwanted && !hasAnalysisResults
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = settings.sortOrder == order,
+                                        role = Role.RadioButton,
+                                        onClick = {
+                                            if (needsAnalysis) {
+                                                coroutineScope.launch { analysisButtonRequester.bringIntoView() }
+                                            } else onSortOrder(order)
+                                        }
+                                    )
+                                    .semantics {
+                                        if (needsAnalysis) stateDescription = "Сначала выполните анализ ниже"
+                                    }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                RadioButton(
+                                    selected = settings.sortOrder == order,
+                                    onClick = null
+                                )
+                                Text(order.label, style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface)
+                            }
                         }
                     }
                 }
