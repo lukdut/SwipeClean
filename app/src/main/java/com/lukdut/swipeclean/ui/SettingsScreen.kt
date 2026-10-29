@@ -335,6 +335,10 @@ private fun AnalysisCard(
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
+                "После полного анализа галереи новые фото анализируются автоматически при открытии приложения, если их меньше 100.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
                 when {
                     modelState.initializing -> "Проверяем модель на устройстве…"
                     modelState.installed == null -> "Для первого анализа нужно скачать модель — около ${modelSizeMiB(modelState.downloadSizeBytes)} МиБ. Затем она работает без интернета. Фотографии остаются на устройстве."

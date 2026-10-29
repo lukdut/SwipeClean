@@ -47,6 +47,16 @@ class MainActivity : ComponentActivity() {
     private val viewModel: AppViewModel by viewModels()
     private var analysisShortcut by mutableIntStateOf(0)
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.setAppVisible(true)
+    }
+
+    override fun onStop() {
+        viewModel.setAppVisible(false)
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleAnalysisShortcut(intent)

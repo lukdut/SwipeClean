@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import androidx.annotation.MainThread
 import androidx.core.content.ContextCompat
+import com.lukdut.swipeclean.data.AnalysisHistoryRepository
 import com.lukdut.swipeclean.data.model.ModelDownloadProgress
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,10 +21,14 @@ object AnalysisCoordinator {
     private var request: Long? = null
     private var job: Job? = null
 
-    fun start(context: Context, total: Int, cached: Int, updateModel: Boolean = false, modelVersion: String? = null) {
+    fun start(context: Context, total: Int, cached: Int, updateModel: Boolean = false, modelVersion: String? = null,
+        automatic: Boolean = false) {
         if (request != null) return
         val id = ++nextRequest
         request = id
+        // A pause, failed start or interrupted pass must require an explicit retry.
+        AnalysisHistoryRepository(context.getSharedPreferences(
+            AnalysisHistoryRepository.PREFERENCES_NAME, Context.MODE_PRIVATE)).markStarted()
         _progress.value = AnalysisProgress(total = total, analyzed = cached, running = true, preparing = true,
             modelVersion = modelVersion)
         try {
@@ -31,6 +36,7 @@ object AnalysisCoordinator {
                 Intent(context, PhotoAnalysisService::class.java)
                     .setAction(PhotoAnalysisService.ACTION_START)
                     .putExtra(PhotoAnalysisService.EXTRA_UPDATE_MODEL, updateModel)
+                    .putExtra(PhotoAnalysisService.EXTRA_AUTOMATIC, automatic)
                     .putExtra(PhotoAnalysisService.EXTRA_REQUEST, id))
         } catch (e: RuntimeException) {
             Log.e("AnalysisCoordinator", "Cannot start photo analysis service", e)

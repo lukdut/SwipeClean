@@ -19,6 +19,7 @@ import com.lukdut.swipeclean.MainActivity
 import com.lukdut.swipeclean.R
 import com.lukdut.swipeclean.data.MediaStoreRepository
 import com.lukdut.swipeclean.data.PhotoAnalyzer
+import com.lukdut.swipeclean.data.AnalysisHistoryRepository
 import com.lukdut.swipeclean.data.PhotoFeedbackRepository
 import com.lukdut.swipeclean.data.db.AppDatabase
 import com.lukdut.swipeclean.data.db.PhotoAnalysisEntity
@@ -42,7 +43,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 
-/** Started only by a visible user action; never restarted automatically by Android. */
+/** Started from the visible app, manually or for a small new batch; never restarted by Android. */
 class PhotoAnalysisService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var analysisJob: Job? = null
@@ -86,7 +87,8 @@ class PhotoAnalysisService : Service() {
         }
 
         val updateModel = intent.getBooleanExtra(EXTRA_UPDATE_MODEL, false)
-        val job = scope.launch(start = CoroutineStart.LAZY) { analyze(request, updateModel) }
+        val automatic = intent.getBooleanExtra(EXTRA_AUTOMATIC, false)
+        val job = scope.launch(start = CoroutineStart.LAZY) { analyze(request, updateModel, automatic) }
         analysisJob = job
         AnalysisCoordinator.attach(request, job)
         job.start()
@@ -94,7 +96,7 @@ class PhotoAnalysisService : Service() {
     }
 
     @OptIn(FlowPreview::class)
-    private suspend fun analyze(request: Long, updateModel: Boolean) {
+    private suspend fun analyze(request: Long, updateModel: Boolean, automatic: Boolean) {
         val updates = scope.launch {
             AnalysisCoordinator.progress.filterNotNull().sample(500).collect { progress ->
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
@@ -120,7 +122,13 @@ class PhotoAnalysisService : Service() {
                 }
             }
 
-            val model = EmbeddingModelRepository.getInstance(this).prepareForAnalysis(update = updateModel) { progress ->
+            val modelRepository = EmbeddingModelRepository.getInstance(this)
+            // Automatic passes only use the already installed model and never download weights.
+            val model = if (automatic) {
+                modelRepository.state.value.installed?.takeIf {
+                    it.spec.embeddingVersion == AnalysisCoordinator.progress.value?.modelVersion
+                } ?: return
+            } else modelRepository.prepareForAnalysis(update = updateModel) { progress ->
                 withContext(Dispatchers.Main.immediate) { AnalysisCoordinator.downloading(request, progress) }
             }
             currentCoroutineContext().ensureActive()
@@ -134,6 +142,9 @@ class PhotoAnalysisService : Service() {
             val cached = dao.getAll().associateBy { it.mediaStoreId }
             val missing = candidates.filter { cached[it.id]?.isComplete(it, model.spec) != true }
             AnalysisCoordinator.prepared(request, candidates.size, candidates.size - missing.size, model.spec.embeddingVersion)
+            // MediaStore may have grown since the ViewModel decided to start automatically.
+            if (automatic && missing.size >= AnalysisHistoryRepository.AUTOMATIC_ANALYSIS_LIMIT) return
+            if (AnalysisCoordinator.shouldStop(request)) return
             PhotoAnalyzer(this, model).use { analyzer -> BatchedAnalysisRunner(parallelism = 1).run(
                 items = missing,
                 shouldStop = { AnalysisCoordinator.shouldStop(request) },
@@ -144,6 +155,12 @@ class PhotoAnalysisService : Service() {
                 },
                 onSkipped = { AnalysisCoordinator.skipped(request) }
             ) }
+            val progress = AnalysisCoordinator.progress.value
+            if (!AnalysisCoordinator.shouldStop(request) && progress != null &&
+                progress.total > 0 && progress.analyzed == progress.total && progress.skipped == 0) {
+                AnalysisHistoryRepository(getSharedPreferences(
+                    AnalysisHistoryRepository.PREFERENCES_NAME, MODE_PRIVATE)).markCompleted(model.spec)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: ModelInstallException) {
@@ -158,8 +175,8 @@ class PhotoAnalysisService : Service() {
             releaseWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
             analysisJob = null
-            AnalysisCoordinator.finish(request, stopError ?: error)
             stopSelf()
+            AnalysisCoordinator.finish(request, stopError ?: error)
         }
     }
 
@@ -236,6 +253,7 @@ class PhotoAnalysisService : Service() {
         internal const val ACTION_PAUSE = "com.lukdut.swipeclean.analysis.PAUSE"
         internal const val EXTRA_REQUEST = "analysis_request"
         internal const val EXTRA_UPDATE_MODEL = "update_model"
+        internal const val EXTRA_AUTOMATIC = "automatic"
         internal const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "photo_analysis"
         private const val TAG = "PhotoAnalysisService"

@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lukdut.swipeclean.analysis.AnalysisCoordinator
 import com.lukdut.swipeclean.analysis.AnalysisProgress
+import com.lukdut.swipeclean.data.AnalysisHistoryRepository
 import com.lukdut.swipeclean.data.MediaPhoto
 import com.lukdut.swipeclean.data.MediaStoreRepository
 import com.lukdut.swipeclean.data.PhotoQuality
@@ -89,6 +90,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsRepository = SettingsRepository(
         application.getSharedPreferences("photo_settings", Context.MODE_PRIVATE)
     )
+    private val analysisHistory = AnalysisHistoryRepository(application.getSharedPreferences(
+        AnalysisHistoryRepository.PREFERENCES_NAME, Context.MODE_PRIVATE))
     private val reviewMutex = Mutex()
     // Apply in-session decisions even if a reload overlaps a pending database write.
     private val reviewOverrides = mutableMapOf<Long, PhotoReviewEntity?>()
@@ -108,6 +111,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var photosLoaded = false
     private var loadGeneration = 0
     private var reviewVisible = false
+    private var appVisible = false
     private var deleteRequestedPhotos: List<MediaPhoto> = emptyList()
 
     private val _settings = MutableStateFlow(settingsRepository.load())
@@ -166,11 +170,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     refreshAnalysisProgress()
                     reorderQueue(preserveVisible = true)
                     schedulePersonalRanking()
+                    maybeStartAutomaticAnalysis()
                 }
             }.collect { }
         }
         viewModelScope.launch {
-            AnalysisCoordinator.progress.collect { refreshAnalysisProgress() }
+            AnalysisCoordinator.progress.collect { session ->
+                refreshAnalysisProgress()
+                if (session?.completed == true && session.skipped == 0 && photosLoaded && !_isLoading.value) {
+                    // Photos discovered during a pass may be outside the service's snapshot.
+                    // Read committed results so a delayed Room emission cannot start a duplicate pass.
+                    applyCachedAnalysis(_allPhotos.value, analysisDao.getAll())
+                    maybeStartAutomaticAnalysis()
+                }
+            }
         }
         viewModelScope.launch {
             combine(feedbackDao.observeAll(), activeModel) { rows, model -> rows to model }.collect { (rows, model) ->
@@ -191,16 +204,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun loadPhotos() {
-        if (_progressReset.value.running || undoing) return
+    fun loadPhotos() = loadPhotos(onlyIfChanged = false)
+
+    private fun loadPhotos(onlyIfChanged: Boolean) {
+        if (_progressReset.value.running || undoing || _deletePreparation.value.running ||
+            _pendingDeleteSender.value != null) return
         val generation = ++loadGeneration
         loadJob?.cancel()
-        AnalysisCoordinator.clearFinishedProgress()
         loadJob = viewModelScope.launch {
             _isLoading.value = true
             _loadError.value = null
             try {
                 val photos = repository.loadAllPhotos()
+                if (onlyIfChanged && photosLoaded && photos == _allPhotos.value) return@launch
+                AnalysisCoordinator.clearFinishedProgress()
                 val reviews = reviewMutex.withLock {
                     dao.getAll().associateBy { it.mediaStoreId }.toMutableMap()
                 }
@@ -306,27 +323,57 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         reorderQueue(preserveVisible = false)
     }
 
-    /** Only a user action starts analysis. Changing sort order, loading or resuming never does. */
-    fun startAnalysis(updateModel: Boolean = false) {
-        if (_isLoading.value || AnalysisCoordinator.progress.value?.running == true) return
-        if (_deletePreparation.value.running || modelState.value.initializing || modelState.value.checking) return
-        if (updateModel && modelState.value.available == null) return
-        val candidates = _allPhotos.value
-        val cached = if (embeddingsVersion == modelState.value.installed?.spec?.embeddingVersion)
-            candidates.count { it.id in embeddings } else 0
-        if (!updateModel && cached == candidates.size) return
+    fun startAnalysis(updateModel: Boolean = false) = startAnalysis(updateModel, automatic = false)
+
+    private fun startAnalysis(updateModel: Boolean, automatic: Boolean) {
         viewModelScope.launch {
             // Commit pending decisions before analysis starts enriching them.
             reviewMutex.withLock {
-                if (!_isLoading.value) AnalysisCoordinator.start(getApplication(), candidates.size,
-                    cached, updateModel, modelState.value.installed?.spec?.embeddingVersion)
+                if (_isLoading.value || AnalysisCoordinator.progress.value?.running == true ||
+                    _progressReset.value.running || _deletePreparation.value.running ||
+                    _pendingDeleteSender.value != null || modelState.value.initializing || modelState.value.checking) return@withLock
+                if (updateModel && modelState.value.available == null) return@withLock
+                val model = modelState.value.installed?.spec
+                val candidates = _allPhotos.value
+                val cached = if (embeddingsVersion == model?.embeddingVersion)
+                    candidates.count { it.id in embeddings } else 0
+                if (!updateModel && cached == candidates.size) return@withLock
+                if (automatic && (!appVisible || _loadError.value != null || model == null ||
+                        !analysisHistory.canStartAutomatically(model, candidates.size - cached))) return@withLock
+                AnalysisCoordinator.start(getApplication(), candidates.size, cached, updateModel,
+                    model?.embeddingVersion, automatic)
             }
         }
     }
 
+    private fun maybeStartAutomaticAnalysis() {
+        if (!photosLoaded || _isLoading.value || _loadError.value != null ||
+            AnalysisCoordinator.progress.value?.running == true || _deletePreparation.value.running ||
+            _pendingDeleteSender.value != null) return
+        val model = modelState.value.installed?.spec ?: return
+        if (embeddingsVersion != model.embeddingVersion) return
+        val photos = _allPhotos.value
+        val missing = photos.count { it.id !in embeddings }
+        // Recognize complete caches saved before automatic analysis was introduced.
+        if (photos.isNotEmpty() && missing == 0) {
+            if (!analysisHistory.hasCompletedGalleryAnalysis(model)) analysisHistory.markCompleted(model)
+        } else if (appVisible && analysisHistory.canStartAutomatically(model, missing)) {
+            startAnalysis(updateModel = false, automatic = true)
+        }
+    }
+
+    fun setAppVisible(visible: Boolean) {
+        appVisible = visible
+        // Discover photos taken while this activity was in the background.
+        if (visible && photosLoaded) loadPhotos(onlyIfChanged = true)
+    }
+
     fun checkModelUpdate() {
         if (modelState.value.checking || _analysisProgress.value.running || _deletePreparation.value.running) return
-        viewModelScope.launch { modelRepository.checkForUpdate() }
+        viewModelScope.launch {
+            modelRepository.checkForUpdate()
+            maybeStartAutomaticAnalysis()
+        }
     }
 
     fun pauseAnalysis() {
@@ -343,10 +390,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _analysisProgress.value = session ?: AnalysisProgress()
             return
         }
+        // Keep the user's saved sort order even while cached analysis is unavailable.
         _hasAnalysisResults.value = analysisResults.isNotEmpty()
-        if (!_hasAnalysisResults.value && _settings.value.sortOrder == SortOrder.ByPotentiallyUnwanted) {
-            setSortOrder(SortOrder.default)
-        }
         // The service publishes committed counts before Room's observer catches up. Preserve those
         // counts for its model; an update cancelled after activation must use the new model's cache.
         if (session != null && (session.running ||
